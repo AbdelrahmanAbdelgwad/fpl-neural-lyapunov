@@ -1,5 +1,5 @@
 # Ignore all folders named 'data'
-**/data/
+**/data_report
 
 # Ignore all folders named 'data'
 **/visualizations/plot*/
@@ -140,7 +140,7 @@ dmypy.json
 gurobi.log
 
 # Pytorch tensors
-*.pt
+# *.pt
 
 # trained model used in tests
 !*/test/data/*.pt
