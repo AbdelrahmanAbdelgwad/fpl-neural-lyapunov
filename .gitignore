@@ -6,6 +6,7 @@
 
 # Ignore all PyTorch model files
 # *.pt
+**/*dataset.pt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
