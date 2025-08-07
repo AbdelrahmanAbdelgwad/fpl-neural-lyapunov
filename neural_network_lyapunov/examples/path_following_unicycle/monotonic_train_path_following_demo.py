@@ -1,5 +1,12 @@
-import neural_network_lyapunov.examples.path_following_unicycle.path_following as path_following
+from __future__ import annotations
+from typing import Union, Iterable, Optional
+import torch
+import scipy.integrate
+import numpy as np
+import argparse
+import os
 
+import neural_network_lyapunov.examples.path_following_unicycle.path_following as path_following
 import neural_network_lyapunov.utils as utils
 import neural_network_lyapunov.feedback_system as feedback_system
 import neural_network_lyapunov.relu_system as relu_system
@@ -15,11 +22,192 @@ import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_bar
 # import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
 import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
 
-import torch
-import scipy.integrate
-import numpy as np
-import argparse
-import os
+
+def geo_mean(t: torch.Tensor, dim: int = 0) -> torch.Tensor:
+    """Geometric mean along `dim` – identical to tf exp/mean/log combo."""
+    return torch.exp(torch.mean(torch.log(t), dim=dim))
+
+
+def p_mean(
+    values: Union[torch.Tensor, Iterable[torch.Tensor]],
+    p: float,
+    slack: float = 1e-7,
+    default_val: float = 0.0,
+    dim: Optional[int] = None,
+    dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
+    """
+    Numerically-stable generalized mean (matches the TF reference).
+    * `values`   – tensor or list/tuple of tensors, all > 0
+    * `p`        – order of the mean (p=0 → geo, p→-∞ → min, p→∞ → max)
+    * `slack`    – tiny bias that lets zero elements leak gradient
+    * `dim`      – dimension(s) to reduce; `None` = all
+    """
+
+    def clip_preserve_grads(
+        val: torch.Tensor,
+        lo: Union[float, torch.Tensor],
+        hi: Union[float, torch.Tensor],
+    ) -> torch.Tensor:
+        """
+        Same trick as tf.clip_by_value + stop_gradient:
+        forward value is clipped, backward passes original gradients.
+        """
+        clipped = torch.clamp(val, lo, hi)
+        return val + (clipped - val).detach()
+
+    if isinstance(values, (list, tuple)):
+        values = torch.stack(values, dim=0)
+        if dim is None:  # want to keep new batch dimension
+            dim = 0
+    x = values.to(dtype or torch.float64)
+
+    slack = torch.as_tensor(slack, dtype=x.dtype, device=x.device)
+    x_slacked = x + slack
+
+    # ----- guard against p≈0 to avoid divide-by-zero in exponent ----------
+    min_val = torch.tensor(1e-4, dtype=x.dtype, device=x.device)
+    p_safe = (
+        -min_val
+        if abs(p) < 1e-4 and p < 0
+        else (
+            min_val
+            if abs(p) < 1e-4 and p > 0
+            else torch.as_tensor(p, dtype=x.dtype, device=x.device)
+        )
+    )
+
+    # ----- empty-tensor fallback -----------------------------------------
+    if x_slacked.numel() == 0:
+        shape = list(x_slacked.shape)
+        if dim is not None:
+            shape.pop(dim if dim >= 0 else dim + x.ndim)
+        return torch.full(shape, default_val, dtype=x.dtype, device=x.device)
+
+    # ----- overflow / under-flow stabiliser ------------------------------
+    stabiliser = torch.min(x_slacked) if p_safe < 1 else torch.max(x_slacked)
+    x_stable = x_slacked / stabiliser
+
+    # ----- actual generalized mean ---------------------------------------
+    if abs(p_safe) < 1e-4:  # geometric case
+        mean_val = geo_mean(x_stable, dim=dim)
+    else:
+        mean_val = torch.mean(x_stable**p_safe, dim=dim) ** (1.0 / p_safe)
+
+    p_meaned = (mean_val - slack) * stabiliser
+
+    # ----- final clip: keep within natural bounds but retain grads -------
+    lo, hi = torch.min(x), torch.max(x)
+    return clip_preserve_grads(p_meaned, lo, hi)
+
+
+def build_piecewise(xy: list[tuple[float, float]], val, clipped: bool = False):
+    """
+    Drop-in for fpl.build_piecewise()  (monotone linear segments).
+    """
+    # xy is sorted ascending on x
+    out = torch.zeros_like(val)
+    for (x0, y0), (x1, y1) in zip(xy[:-1], xy[1:]):
+        seg = (val - x0) / (x1 - x0) * (y1 - y0) + y0
+        if clipped:
+            seg = seg.clamp(min=min(y0, y1), max=max(y0, y1))
+        out = torch.where(val < x1, seg, out)
+    return out
+
+
+def pretrain_fpl(actor, V, dyn, args, device):
+    """
+    Constraint-based warm-up that copies lyapunov_diff_robot.py 1-for-1.
+    """
+    actor.train()
+    V.train()
+    # opt = torch.optim.Adam(
+    #     list(actor.parameters()) + list(V.parameters()), lr=args.fpl_lr
+    # )
+    opt = torch.optim.Adam(
+        [
+            {"params": actor.parameters(), "lr": args.fpl_lr * 5},
+            {"params": V.parameters(), "lr": args.fpl_lr},
+        ],
+        betas=(0.9, 0.999),
+    )
+
+    def euclidean_distance(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """
+        L2 distance for any state dimension (2-D error state here).
+        Works for batch tensors shaped (B, D).
+        """
+        return torch.linalg.norm(a - b, dim=1)
+
+    for epoch in range(args.fpl_epochs):
+        # -------- draw a batch --------
+        state_dim = 2  # <<— add this near the top of pretrain_fpl
+        x0 = (torch.rand(args.fpl_batch, state_dim, device=device) * 2) - 1  # [-1,1]^2
+        x0 = x0.double()
+        sp = torch.zeros_like(x0)  # origin tracking
+        sp = sp.double()
+
+        # -------- forward simulate N steps --------
+        N = torch.randint(args.fpl_minN, args.fpl_maxN + 1, (1,), device=device).item()
+        x = x0.clone()
+        for _ in range(N):
+            u = actor(x)  # no sp in this example
+            z = dyn(torch.cat([x, u], dim=1))  # simple forward model
+            x = z  # overwrite
+
+        # -------- compute constraints --------
+        # Since the networks output positive values, we can safely use tanh to clip
+        # the values to [-1, 1] range, which is equivalent to clipping to [0, 1] range
+        # in this context.
+        V0 = torch.tanh(V(x0))  # shape (B,1)
+        VN = torch.tanh(V(x))  # shape (B,1)
+
+        Vsp = V(sp)  # V at the origin
+
+        # ----- 1. decrease (unchanged) ---------------------------------
+        ΔV = V0 - VN
+        req = torch.minimum(V0, torch.full_like(V0, N / 50))
+        dec_sat = p_mean(
+            build_piecewise(
+                [(-1.0, 0.0), (-0.05, 0.001), (0.0, 0.01), (req, 0.9), (1.0, 1.0)],
+                ΔV,
+                clipped=True,
+            ),
+            p=-1,
+        )
+
+        # ----- 2. zero-at-origin (kept only for numerical symmetry) ----
+        # even though Vsp≈0 by design, keep the clause so the power-mean
+        # structure matches TF exactly and prevents division-by-zero later.
+        zero_sat = p_mean(1.0 - torch.sqrt(Vsp + 1e-9), p=-1)
+
+        # ----- 3. positivity-away-from-origin --------------------------
+        dist = euclidean_distance(x0, sp)  # batch L2
+        dist_threshold = 0.0001
+        pos_sat = p_mean(
+            torch.minimum(V0 * (dist > dist_threshold) * 5.0, torch.ones_like(V0)), p=0
+        )
+
+        # ----- navigation helpers --------------------------------------
+        vdot = torch.sigmoid(ΔV * 10.0)  # same scaling as TF
+        prox = torch.exp(-euclidean_distance(x, sp))  # same decay
+        loss = 1.0 - p_mean(
+            torch.stack(
+                [
+                    p_mean(torch.stack([vdot.squeeze(-1), prox]), p=0),
+                    p_mean(torch.stack([zero_sat, pos_sat, dec_sat]), p=0),
+                ]
+            ),
+            p=0,
+        )
+
+        # -------- optimise --------
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+
+        if epoch % 10 == 0:
+            print(f"[FPL] {epoch:03d}/{args.fpl_epochs}  fulfil={1-loss.item():.3f}")
 
 
 def rotation_matrix(theta):
@@ -273,7 +461,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
-        default=100,
+        default=25,
         help="number of epochs in pre-training on samples.",
     )
     parser.add_argument(
@@ -302,6 +490,18 @@ if __name__ == "__main__":
         default=0,
         help="bound level of x from pre-trained controller and lyapunov.",
     )
+    # after the existing argparse block
+    parser.add_argument(
+        "--pretrain_fpl",
+        action="store_true",
+        help="run FPL warm-up before monotonic training",
+    )
+    parser.add_argument("--fpl_epochs", type=int, default=150)
+    parser.add_argument("--fpl_batch", type=int, default=256)
+    parser.add_argument("--fpl_minN", type=int, default=3)
+    parser.add_argument("--fpl_maxN", type=int, default=20)
+    parser.add_argument("--fpl_lr", type=float, default=5e-4)
+
     args = parser.parse_args()
 
     args.search_R = True
@@ -320,24 +520,24 @@ if __name__ == "__main__":
         bound_level_last = args.bound_level_last  # bound_level-1
         args.load_controller_relu = (
             dir_path
-            # + "/data/monotonic/monotonic_bound"
-            + "/data/monotonic_roa/monotonic_bound"
+            + "/data/monotonic/monotonic_bound"
+            # + "/data/monotonic_roa/monotonic_bound"
             + str(bound_level_last)
-            + "_controller.pt"
+            + f"/monotonic_bound{bound_level_last}_controller.pt"
         )
         args.load_lyapunov_relu = (
             dir_path
-            # + "/data/monotonic/monotonic_bound"
-            + "/data/monotonic_roa/monotonic_bound"
+            + "/data/monotonic/monotonic_bound"
+            # + "/data/monotonic_roa/monotonic_bound"
             + str(bound_level_last)
-            + "_lyapunov.pt"
+            + f"/monotonic_bound{bound_level_last}_lyapunov.pt"
         )
         args.load_lyapunov_R = (
             dir_path
-            # + "/data/monotonic/monotonic_bound"
-            + "/data/monotonic_roa/monotonic_bound"
+            + "/data/monotonic/monotonic_bound"
+            # + "/data/monotonic_roa/monotonic_bound"
             + str(bound_level_last)
-            + "_R.pt"
+            + f"/monotonic_bound{bound_level_last}_R.pt"
         )
         print("pre-trained bound level is: ", bound_level_last)
     print("pretrained lyapunov path: ", args.load_lyapunov_relu)
@@ -470,6 +670,47 @@ if __name__ == "__main__":
         x_eqlm=forward_system.x_equilibrium,
         provided_v=S_eig_vec,
     )
+
+    ###############################
+    device = torch.device("cpu")
+    actor = controller_relu.to(device).double()
+    V = lyapunov_relu.to(device).double()
+
+    if args.pretrain_fpl:
+        print("▶  FPL pre-training …")
+        pretrain_fpl(actor, V, dynamics_relu.to(device).double(), args, device)
+        torch.save(actor.state_dict(), "controller_preFPL.pt")
+        torch.save(V.state_dict(), "lyapunov_preFPL.pt")
+
+        # Create a new forward system and closed loop system using the pre-trained networks (a pytorch technicality)
+        forward_system = relu_system.ReLUSystemGivenEquilibrium(
+            torch.float64,
+            x_lo,
+            x_up,
+            u_lo,
+            u_up,
+            dynamics_relu,
+            q_equilibrium,
+            u_equilibrium,
+            dt,
+        )
+        closed_loop_system = feedback_system.FeedbackSystem(
+            forward_system,
+            controller_relu,
+            forward_system.x_equilibrium,
+            forward_system.u_equilibrium,
+            u_lo.detach().numpy(),
+            u_up.detach().numpy(),
+        )
+
+        print("✅  FPL warm-up done — switching to monotonic search")
+
+    for m in (actor, V, dynamics_relu):
+        for p in m.parameters():
+            p.data = p.data.double()
+
+    ############################
+
     if args.train_cost_approximator:
         train_cost_approximator(state_samples, cost_samples, lyapunov_relu, V_lambda)
     elif args.load_lyapunov_relu is not None:
@@ -520,11 +761,15 @@ if __name__ == "__main__":
 
     if args.train_on_samples:
         dut.train_lyapunov_on_samples(
-            state_samples_all, num_epochs=args.pretrain_num_epochs, batch_size=50
+            state_samples_all, num_epochs=args.pretrain_num_epochs, batch_size=64
         )
     dut.enable_wandb = args.enable_wandb
     dut.save_network_path = (
-        dir_path + "/data/monotonic_roa/monotonic_bound" + str(bound_level) + "_"
+        # dir_path + "/data/monotonic_roa/monotonic_bound" + str(bound_level) + "_"
+        dir_path
+        + "/data/monotonic/monotonic_bound"
+        + str(bound_level)
+        # + "_"
     )
     if args.train_adversarial:
         dut.save_network_path += "adversarial_"

@@ -1011,7 +1011,12 @@ class Trainer:
                         "total training time: ", round(time_used / 60.0, 2), "minutes"
                     )
                 dict = {"loss_history": loss_history, "total_training_time": time_used}
-                npy_path = self.save_network_path + f'{"loss_history.npy"}'
+                npy_path = (
+                    self.save_network_path
+                    + "/"
+                    + self.save_network_path.split("/")[-1]
+                    + f'{"_loss_history.npy"}'
+                )
                 with open(npy_path, "wb") as file_path:
                     np.save(file_path, dict)
 
@@ -1024,15 +1029,27 @@ class Trainer:
                     print("save the best model at the end")
                 torch.save(
                     self.lyapunov_hybrid_system.lyapunov_relu,
-                    self.save_network_path + f'{"lyapunov.pt"}',
+                    self.save_network_path
+                    + "/"
+                    + self.save_network_path.split("/")[-1]
+                    + f'{"_lyapunov.pt"}',
                 )
-                torch.save(self.R_options.R(), self.save_network_path + f'{"R.pt"}')
+                torch.save(
+                    self.R_options.R(),
+                    self.save_network_path
+                    + "/"
+                    + self.save_network_path.split("/")[-1]
+                    + f'{"_R.pt"}',
+                )
                 if isinstance(
                     self.lyapunov_hybrid_system.system, feedback_system.FeedbackSystem
                 ):
                     torch.save(
                         self.lyapunov_hybrid_system.system.controller_network,
-                        self.save_network_path + f'{"controller.pt"}',
+                        self.save_network_path
+                        + "/"
+                        + self.save_network_path.split("/")[-1]
+                        + f'{"_controller.pt"}',
                     )
 
     def print(self):
@@ -1324,26 +1341,29 @@ class Trainer:
             )
             if test_loss.item() < best_loss:
                 best_loss = test_loss.item()
-                best_lyapunov_relu = copy.deepcopy(
-                    self.lyapunov_hybrid_system.lyapunov_relu
-                )
+                # ---- keep a leaf-tensor snapshot (safe for every PyTorch version) ----
+                best_lyapunov_state = {
+                    k: v.detach().clone()
+                    for k, v in self.lyapunov_hybrid_system.lyapunov_relu.state_dict().items()
+                }
                 if isinstance(
                     self.lyapunov_hybrid_system.system, feedback_system.FeedbackSystem
                 ):
-                    best_controller_relu = copy.deepcopy(
-                        self.lyapunov_hybrid_system.system.controller_network
-                    )
+                    best_controller_state = {
+                        k: v.detach().clone()
+                        for k, v in self.lyapunov_hybrid_system.system.controller_network.state_dict().items()
+                    }
 
-        print(f"best loss {best_loss}")
-        self.lyapunov_hybrid_system.lyapunov_relu.load_state_dict(
-            best_lyapunov_relu.state_dict()
-        )
-        if isinstance(
-            self.lyapunov_hybrid_system.system, feedback_system.FeedbackSystem
-        ):
-            self.lyapunov_hybrid_system.system.controller_network.load_state_dict(
-                best_controller_relu.state_dict()
+            print(f"best loss {best_loss}")
+            self.lyapunov_hybrid_system.lyapunov_relu.load_state_dict(
+                best_lyapunov_state
             )
+            if isinstance(
+                self.lyapunov_hybrid_system.system, feedback_system.FeedbackSystem
+            ):
+                self.lyapunov_hybrid_system.system.controller_network.load_state_dict(
+                    best_controller_state
+                )
 
     class AdversarialTrainingOptions:
         def __init__(self):

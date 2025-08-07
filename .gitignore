@@ -154,3 +154,4 @@ notebooks/*.p
 *wandb
 
 lyapunov_venv/
+visualization_results/
