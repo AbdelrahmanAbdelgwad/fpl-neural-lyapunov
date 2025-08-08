@@ -22,6 +22,8 @@ import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_bar
 # import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
 import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
 
+from neural_network_lyapunov.examples.path_following_unicycle.preprocess.fpl import *
+
 
 def rotation_matrix(theta):
     c_theta = np.cos(theta)
@@ -274,7 +276,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
-        default=25,
+        default=200,
         help="number of epochs in pre-training on samples.",
     )
     parser.add_argument(
@@ -302,6 +304,20 @@ if __name__ == "__main__":
         type=int,
         default=0,
         help="bound level of x from pre-trained controller and lyapunov.",
+    )
+    parser.add_argument(
+        "--use_fpl",
+        action="store_true",
+        help="use FPL for training.",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=0.003,
+        help="Learning rate for FPL training",
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=128, help="Batch size for FPL training"
     )
 
     args = parser.parse_args()
@@ -532,7 +548,20 @@ if __name__ == "__main__":
     dut.output_flag = True
     dut.search_controller = search_controllerFalg
 
-    if args.train_on_samples:
+    if args.use_fpl:
+        # Create FPL trainer
+        fpl_trainer = FPLMonotonicLyapunovTrainer(
+            lyapunov_hybrid_system,
+            closed_loop_system,
+            V_lambda,
+            closed_loop_system.x_equilibrium,
+            R_options,
+        )
+
+        # Train with FPL
+        fpl_trainer = train_with_fpl(fpl_trainer, state_samples_all, args)
+
+    elif args.train_on_samples:
         dut.train_lyapunov_on_samples(
             state_samples_all, num_epochs=args.pretrain_num_epochs, batch_size=64
         )

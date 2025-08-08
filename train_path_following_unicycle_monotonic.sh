@@ -16,9 +16,17 @@ source ./config/setup_environments.sh
 # Stay in current directory instead of wrong path
 # cd /home/zw2445/Documents/neural-network-lyapunov  # Remove this line
 
-for i in {1..40}; 
-do 
-    python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py --bound_level=$i --bound_level_last=$(($i-1)) --pretrain_fpl; 
+for i in {1..40}; do
+    if [ "$i" -eq 1 ]; then
+        python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
+            --bound_level=$i \
+            --bound_level_last=$(($i-1)) \
+            --use_fpl
+    else
+        python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
+            --bound_level=$i \
+            --bound_level_last=$(($i-1))
+    fi
 done
 
 conda deactivate

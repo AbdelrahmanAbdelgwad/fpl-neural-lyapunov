@@ -1309,7 +1309,7 @@ class Trainer:
                     lyap_derivative_mip_cost_weight=None,
                     boundary_value_gap_mip_cost_weight=0,
                 )
-                total_loss_return.loss.backward()
+                total_loss_return.loss.backward(retain_graph=True)
                 optimizer.step()
                 running_loss += total_loss_return.loss.item()
 
@@ -1504,7 +1504,7 @@ class Trainer:
                     )
                 )
                 batch_loss = positivity_sample_loss + derivative_sample_loss
-                batch_loss.backward()
+                batch_loss.backward(retain_graph=True)
                 optimizer.step()
 
             derivative_state_samples_next_all = (
@@ -1765,7 +1765,7 @@ class TrainValueApproximator:
             loss = torch.nn.MSELoss()(value_relu, value_samples_all)
             if loss.item() <= self.convergence_tolerance:
                 return True, loss.item()
-            loss.backward()
+            loss.backward(retain_graph=True)
             optimizer.step()
         return False, loss.item()
 
