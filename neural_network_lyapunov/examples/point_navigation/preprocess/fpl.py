@@ -132,9 +132,6 @@ class FPLMonotonicLyapunovTrainer:
         self.R_options = R_options
 
     def rollout_trajectory(self, initial_states: torch.Tensor, horizon: int) -> tuple:
-        """
-        Simulate forward and return (trajectory, V_values, u_values).
-        """
         batch_size, state_dim = initial_states.shape
         device = initial_states.device
 
@@ -150,7 +147,7 @@ class FPLMonotonicLyapunovTrainer:
         )
         u_values = torch.zeros(
             batch_size, horizon, 1, device=device, dtype=initial_states.dtype
-        )  # assuming 1D u
+        )
 
         trajectory[:, 0] = initial_states
         current_states = initial_states
@@ -159,65 +156,48 @@ class FPLMonotonicLyapunovTrainer:
             # V(x_t)
             V_values[:, t] = self.compute_lyapunov_value(current_states).squeeze()
 
-            # u_t (use the same controller used by step_forward)
+            # u_t (controller is differentiable)
             u_t = self.closed_loop_system.compute_u_pre(current_states)
             u_values[:, t, 0] = u_t.squeeze(-1)
 
-            # x_{t+1}
-            next_states = self.closed_loop_system.step_forward(current_states)
+            # x_{t+1} = f(x_t, u_t)   (NO .detach(); NO in-place)
+            ns = self.closed_loop_system.step_forward(current_states)
+            d = torch.clamp(ns[:, 0:1], min=0.0)
+            th = ((ns[:, 1:2] + torch.pi) % (2 * torch.pi)) - torch.pi
+            next_states = torch.cat((d, th), dim=1)
+
             trajectory[:, t + 1] = next_states
             current_states = next_states
 
+        # V(x_{horizon})
         V_values[:, -1] = self.compute_lyapunov_value(current_states).squeeze()
         return trajectory, V_values, u_values
 
-    def _effort_fulfillment(self, u_values: torch.Tensor) -> torch.Tensor:
-        """
-        Per-trajectory effort fulfillment in [0,1].
-
-        We want to reward staying close to u* (equilibrium control), not small |u|.
-        f = 1 - mean_t,dim( ((u - u_eq)/r)^2 ), where r = (u_up - u_lo)/2.
-        Returns shape [batch].
-        """
-        device, dtype = u_values.device, u_values.dtype
-
-        # Get equilibrium and limits from the same feedback system used for rollout
-        u_eq = self.closed_loop_system.u_equilibrium.view(1, 1, -1).to(
-            device=device, dtype=dtype
-        )
-        u_lo = (
-            torch.from_numpy(self.closed_loop_system.u_lower_limit)
-            .view(1, 1, -1)
-            .to(device=device, dtype=dtype)
-        )
-        u_up = (
-            torch.from_numpy(self.closed_loop_system.u_upper_limit)
-            .view(1, 1, -1)
-            .to(device=device, dtype=dtype)
-        )
-
-        r = (0.5 * (u_up - u_lo)).clamp_min(1e-9)
-
-        # normalize deviation from equilibrium and average across time+dims
-        mean_norm_sq = ((u_values - u_eq) / r).pow(2).mean(dim=(1, 2))  # [batch]
-        return 1.0 - mean_norm_sq.clamp(0.0, 1.0)
+    def _effort_fulfillment(self, u_values):
+        u_values = torch.abs(u_values)
+        u_max = 10.0  # match your controller bounds / dataset
+        u_values = torch.clamp(u_values / u_max, 0, 1)
+        return 1.0 - u_values.mean(dim=1)
 
     def compute_lyapunov_value(self, states: torch.Tensor) -> torch.Tensor:
-        """
-        Compute V(x) using the monotonic Lyapunov network.
-        """
+        # ensure 2D: (B,2)
+        if states.dim() == 1:
+            states = states.unsqueeze(0)
+        xeq = self.x_equilibrium
+        if xeq.dim() == 1:
+            xeq = xeq.unsqueeze(0)
+
         relu_output = self.lyapunov_system.lyapunov_relu(states)
-        relu_equilibrium = self.lyapunov_system.lyapunov_relu(self.x_equilibrium)
+        relu_equilibrium = self.lyapunov_system.lyapunov_relu(xeq)
 
         R = self.R_options.R() if hasattr(self.R_options, "R") else self.R_options
-
+        delta = states - xeq  # (B,2)
+        # use .mT (batch-friendly) and avoid .reshape(-1,1) surprises
         V = (
             relu_output
             - relu_equilibrium
-            + self.V_lambda
-            * torch.norm(R @ (states - self.x_equilibrium).T, p=1, dim=0).reshape(-1, 1)
+            + self.V_lambda * torch.norm(R @ delta.mT, p=1, dim=0).unsqueeze(1)
         )
-
         return V
 
     def compute_fpl_loss(
@@ -231,6 +211,35 @@ class FPLMonotonicLyapunovTrainer:
 
         V_initial = V_values[:, 0]
         V_final = V_values[:, -1]
+
+        # # DEBUG: Check what's happening with trajectories
+        # print(f"\n=== Debug Info ===")
+        # print(f"Horizon: {horizon}")
+        # print(f"Batch size: {batch_states.shape[0]}")
+
+        # # Check a single trajectory
+        # idx = 0  # First trajectory
+        # print(f"\nTrajectory {idx}:")
+        # print(f"  Initial state: {batch_states[idx].tolist()}")
+        # # print intermediate states
+        # for t in range(horizon + 1):
+        #     print(f"  State at t={t}: {trajectories[idx, t].tolist()}")
+        # print(f"  Control inputs: {u_values[idx].squeeze().tolist()}")
+        # print(f"  Final state: {trajectories[idx, -1].tolist()}")
+        # print(f"  Initial V: {V_initial[idx].item():.6f}")
+        # print(f"  Final V: {V_final[idx].item():.6f}")
+        # print(f"  V_decrease: {(V_initial[idx] - V_final[idx]).item():.6f}")
+
+        # # Check if states are actually moving toward equilibrium
+        # initial_dist = torch.norm(batch_states[idx] - self.x_equilibrium).item()
+        # final_dist = torch.norm(trajectories[idx, -1] - self.x_equilibrium).item()
+        # print(f"  Initial distance from eq: {initial_dist:.6f}")
+        # print(f"  Final distance from eq: {final_dist:.6f}")
+        # print(f"  Distance decrease: {(initial_dist - final_dist):.6f}")
+
+        # # Print first few V values along trajectory
+        # print(f"  V trajectory: {V_values[idx, :5].tolist()}")
+        # print("==================\n")
 
         # distances
         initial_distances = torch.norm(batch_states - self.x_equilibrium, p=2, dim=1)
@@ -260,13 +269,18 @@ class FPLMonotonicLyapunovTrainer:
         # 1) Lyapunov exponential decrease (not finite time decay with build_piecewise)
         # V_dot <= -K * V
         # Discrete condition: V_final - V_initial <= -K * V_initial  ⇔  V_final <= (1 - K) * V_initial
-        K = 0.2  # decay rate
+        # # When computing decrease satisfaction, normalize V values first
+        # V_initial_norm = V_initial / (self.V_scale if hasattr(self, "V_scale") else 1.0)
+        # V_final_norm = V_final / (self.V_scale if hasattr(self, "V_scale") else 1.0)
 
-        # Numerical guard near the origin (optional)
-        eps = 1e-8
-        mask = V_initial > eps
+        # Use normalized values for exponential decay check
+        K = 0.2
+        eps = 1e-4  # Increased from 1e-8
+        # mask = V_initial_norm > eps
+        mask = V_initial > eps  # Use original values for masking
 
-        # Focus the constraint away from the origin
+        # V_i = V_initial_norm[mask]
+        # V_f = V_final_norm[mask]
         V_i = V_initial[mask]
         V_f = V_final[mask]
 
@@ -283,6 +297,7 @@ class FPLMonotonicLyapunovTrainer:
             if violation.numel() > 0
             else V_initial.new_tensor(0.0)
         )
+        lyap_decay_loss = lyap_decay_loss
 
         # saturate the penalty to be betwenen 0 and 1 without clipping gradients
         lyap_decay_loss = torch.tanh(lyap_decay_loss)
@@ -306,7 +321,7 @@ class FPLMonotonicLyapunovTrainer:
         )
 
         # 3) Zero at Equilibrium Constraint
-        V_at_eq = self.compute_lyapunov_value(self.x_equilibrium).squeeze()
+        V_at_eq = self.compute_lyapunov_value(self.x_equilibrium.unsqueeze(0)).squeeze()
         zero_constraint = 1.0 - torch.sqrt(V_at_eq + 1e-9)
 
         # 4) Progress toward eq
@@ -333,7 +348,7 @@ class FPLMonotonicLyapunovTrainer:
                     p_value=-2.0,  # geometric mean
                     constraints={
                         # "progress": p_mean(progress, -2.0),
-                        "v_dot": p_mean(torch.sigmoid(V_decrease * 10), 0.0),
+                        "v_dot": p_mean(torch.sigmoid(V_decrease * 10), -2.0),
                         "effort": p_mean(effort_fulfillment, -2.0),
                     },
                 ),

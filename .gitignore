@@ -155,3 +155,4 @@ notebooks/*.p
 
 lyapunov_venv/
 visualization_results/
+viz_compare

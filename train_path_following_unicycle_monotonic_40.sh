@@ -19,17 +19,8 @@ source ./config/setup_environments.sh
 # Start timer
 SECONDS=0
 
-for i in {1..40}; do
-    # if [ "$i" -eq 1 ]; then
-    #     python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
-    #         --bound_level=$i \
-    #         --bound_level_last=$(($i-1)) \
-    # else
-    python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
-        --bound_level=$i \
-        --bound_level_last=$(($i-1))
-    # fi
-done
+python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
+    --bound_level=40 \
 
 # Stop timer and report
 duration=$SECONDS

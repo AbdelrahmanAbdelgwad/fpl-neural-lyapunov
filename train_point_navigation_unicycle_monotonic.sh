@@ -20,15 +20,18 @@ source ./config/setup_environments.sh
 SECONDS=0
 
 for i in {1..40}; do
-    # if [ "$i" -eq 1 ]; then
-    #     python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
-    #         --bound_level=$i \
-    #         --bound_level_last=$(($i-1)) \
-    # else
-    python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
-        --bound_level=$i \
-        --bound_level_last=$(($i-1))
-    # fi
+    if [ "$i" -eq 1 ]; then
+        python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
+            --bound_level=$i \
+            --bound_level_last=$(($i-1)) \
+            # --train_forward_model \
+            # --generate_dynamics_data \
+
+    else
+        python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
+            --bound_level=$i \
+            --bound_level_last=$(($i-1))
+    fi
 done
 
 # Stop timer and report

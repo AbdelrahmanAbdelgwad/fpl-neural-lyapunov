@@ -6,7 +6,7 @@ import numpy as np
 import argparse
 import os
 
-import neural_network_lyapunov.examples.path_following_unicycle.path_following as path_following
+import neural_network_lyapunov.examples.point_navigation.point_navigation as point_navigation
 import neural_network_lyapunov.utils as utils
 import neural_network_lyapunov.feedback_system as feedback_system
 import neural_network_lyapunov.relu_system as relu_system
@@ -22,7 +22,7 @@ import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_bar
 # import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
 import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
 
-from neural_network_lyapunov.examples.path_following_unicycle.preprocess.fpl import *
+from neural_network_lyapunov.examples.point_navigation.preprocess.fpl import *
 
 
 def rotation_matrix(theta):
@@ -31,102 +31,96 @@ def rotation_matrix(theta):
     return torch.tensor([[c_theta, -s_theta], [s_theta, c_theta]], dtype=torch.float64)
 
 
-def generate_pendulum_dynamics_data(dt):
+def generate_point_nav_dynamics_data(dt=0.01, max_v=6.0, u_max=10.0):
     """
-    Generate the pairs (x[n], u[n]) -> (x[n+1])
+    Dataset for point navigation: (x,u) -> x_next.
+    x = [d, theta_e], u = [omega].
     """
     dtype = torch.float64
-    plant = pendulum.Pendulum(dtype)
-    # We first generate the training data by simulating the system using some
-    # LQR controller.
-    Q = np.diag(np.array([1, 10.0]))
+    plant = point_navigation.Point_Stabilization(dtype=dtype, v_max=max_v)
+
+    def step_once(x_np, u_np):
+        out = scipy.integrate.solve_ivp(
+            lambda t, x_: plant.dynamics(x_, u_np), (0, dt), x_np, t_eval=[dt]
+        )
+        return out.y[:, -1]
+
+    states, controls, next_states = [], [], []
+
+    # Rollouts from a grid with a simple LQR for coverage
+    Q = np.diag([1.0, 1.0])
     R = np.array([[1.0]])
-    lqr_gain = plant.lqr_control(Q, R)
-    # Try many initial states. Some close to [pi, 0], some far away from
-    # [pi, 0].
-    x0s = [
-        np.array([np.pi + 0.1, 0.2]),
-        np.array([np.pi - 0.1, 0.3]),
-        np.array([np.pi - 0.2, -0.3]),
-        np.array([np.pi + 0.15, -0.3]),
-    ]
-    x0s.append(np.array([np.pi - 0.5, 1.5]))
-    x0s.append(np.array([np.pi + 0.5, 1.5]))
-    x0s.append(np.array([np.pi + 1.0, 1.0]))
-    x_des = np.array([np.pi, 0])
+    K, _ = plant.lqr_control(Q, R)
 
-    def converged(t, y):
-        return np.linalg.norm(y - x_des) - 1e-2
+    d0s = np.linspace(0.5, 20.0, 8)
+    th0s = np.linspace(-np.pi, np.pi, 9)
+    for d0 in d0s:
+        for th0 in th0s:
+            x = np.array([d0, th0], dtype=float)
+            for _ in range(int(6.0 / dt)):
+                u = (K @ x).reshape(1)  # u = [omega]
+                x_next = step_once(x, u)
+                states.append(torch.tensor(x, dtype=dtype))
+                controls.append(torch.tensor(u, dtype=dtype).view(-1))
+                next_states.append(torch.tensor(x_next, dtype=dtype))
+                x = x_next
 
-    converged.terminal = True
+    # Random one-steps to fill corners
+    rng = np.random.default_rng(0)
+    for _ in range(4000):
+        x = np.array([rng.uniform(0.0, 20.0), rng.uniform(-np.pi, np.pi)], dtype=float)
+        u = np.array([rng.uniform(-u_max, u_max)], dtype=float)
+        x_next = step_once(x, u)
+        states.append(torch.tensor(x, dtype=dtype))
+        controls.append(torch.tensor(u, dtype=dtype).view(-1))
+        next_states.append(torch.tensor(x_next, dtype=dtype))
 
-    states = []
-    controls = []
-    next_states = []
-
-    for x0 in x0s:
-        result = scipy.integrate.solve_ivp(
-            lambda t, x: plant.dynamics(x, lqr_gain @ (x - x_des)),
-            (0, 10),
-            x0,
-            t_eval=np.arange(0, 10, dt),
-            events=converged,
-        )
-        states.append(torch.from_numpy(result.y[:, :-1]))
-        controls.append(
-            torch.from_numpy(lqr_gain @ (result.y[:, :-1] - x_des.reshape((-1, 1))))
-        )
-        next_states.append(torch.from_numpy(result.y[:, 1:]))
-
-    # Now take a grid of x and u, and compute the next state.
-    theta_grid = np.linspace(-0.5 * np.pi, 2.5 * np.pi, 101)
-    thetadot_grid = np.linspace(-5, 5, 101)
-    u_grid = np.linspace(-15, 15, 401)
-
-    for i in range(len(theta_grid)):
-        for j in range(len(thetadot_grid)):
-            for k in range(len(u_grid)):
-                states.append(
-                    torch.tensor([[theta_grid[i]], [thetadot_grid[j]]], dtype=dtype)
-                )
-                controls.append(torch.tensor([[u_grid[k]]], dtype=dtype))
-                result = scipy.integrate.solve_ivp(
-                    lambda t, x: plant.dynamics(x, np.array([u_grid[k]])),
-                    (0, dt),
-                    np.array([theta_grid[i], thetadot_grid[j]]),
-                )
-                next_states.append(torch.from_numpy(result.y[:, -1].reshape((-1, 1))))
-
-    dataset_input = torch.cat(
-        (torch.cat(states, dim=1), torch.cat(controls, dim=1)), dim=0
-    ).T
-    dataset_output = torch.cat(next_states, dim=1).T
-    return torch.utils.data.TensorDataset(dataset_input, dataset_output)
+    X = torch.stack(states)  # (N, 2)
+    U = torch.stack(controls)  # (N, 1)
+    Xn = torch.stack(next_states)  # (N, 2)
+    return torch.utils.data.TensorDataset(torch.cat((X, U), dim=1), Xn)  # ((N,3),(N,2))
 
 
-def train_forward_model(dynamics_model, model_dataset):
-    state_equilibrium = torch.tensor([np.pi, 0], dtype=torch.float64)
-    control_equilibrium = torch.tensor([0], dtype=torch.float64)
-    # model_dataset contains the mapping from (x[n], u[n]) to x[n+1], but we
-    # only need a mapping from (x[n], u[n]) to v[n+1]. So we regenerate a
-    # dataset whose target only contains thetadot.
-    (xu_inputs, x_next_outputs) = model_dataset[:]
-    v_dataset = torch.utils.data.TensorDataset(
-        xu_inputs, x_next_outputs[:, 1].reshape((-1, 1))
-    )
+def train_forward_model(
+    dynamics_model,
+    model_dataset,
+    state_equilibrium: torch.Tensor = torch.tensor([0.0, 0.0], dtype=torch.float64),
+    control_equilibrium: torch.Tensor = torch.tensor([0.0], dtype=torch.float64),
+    num_epochs: int = 100,
+    lr: float = 1e-3,
+    batch_size: int = 256,
+):
+    """
+    Train φ_dyn so that the composed map
+        f(x,u) = φ_dyn(x,u) - φ_dyn(x*,u*) + x*
+    matches the true one-step next state x_next on dataset samples.
+    We *do not* bake the shift into the saved model; we only use it in the loss.
+    At runtime, ReLUSystemGivenEquilibrium will apply the same shift.
+    """
+    xu, x_next = model_dataset[
+        :
+    ]  # xu: (N, 3) with [d, theta_e, omega],  x_next: (N, 2)
 
-    def compute_next_v(model, state_action):
-        return model(state_action) - model(
-            torch.cat((state_equilibrium, control_equilibrium))
-        )
+    # Precompute the equilibrium (x*, u*) in the same dtype/device as xu
+    def make_eq(batch_like):
+        eq = torch.cat((state_equilibrium, control_equilibrium)).to(batch_like)
+        return eq
+
+    eq_once = make_eq(xu).unsqueeze(0)  # shape (1, 3)
+
+    def fwd(phi, inp):
+        # Broadcast eq to batch, then apply (1a): f = φ(x,u) - φ(x*,u*) + x*
+        eq = eq_once.expand(inp.shape[0], -1).to(inp)
+        pred = phi(inp) - phi(eq) + state_equilibrium.to(inp)
+        return pred  # (N, 2)
 
     utils.train_approximator(
-        v_dataset,
+        model_dataset,
         dynamics_model,
-        compute_next_v,
-        batch_size=20,
-        num_epochs=100,
-        lr=0.001,
+        fwd,
+        batch_size=batch_size,
+        num_epochs=num_epochs,
+        lr=lr,
     )
 
 
@@ -276,7 +270,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
-        default=400,
+        default=150,
         help="number of epochs in pre-training on samples.",
     )
     parser.add_argument(
@@ -359,27 +353,43 @@ if __name__ == "__main__":
         )
         print("pre-trained bound level is: ", bound_level_last)
     print("pretrained lyapunov path: ", args.load_lyapunov_relu)
-    x_lo = (
-        torch.tensor([-0.8 * bound_level_x, -0.8 * bound_level_y], dtype=torch.float64)
-        / 40.0
-    )
-    x_up = (
-        torch.tensor([0.8 * bound_level_x, 0.8 * bound_level_y], dtype=torch.float64)
-        / 40.0
-    )
+    # x_lo = (
+    #     torch.tensor([-0.8 * bound_level_x, -0.8 * bound_level_y], dtype=torch.float64)
+    #     / 40.0
+    # )
+    # x_up = (
+    #     torch.tensor([0.8 * bound_level_x, 0.8 * bound_level_y], dtype=torch.float64)
+    #     / 40.0
+    # )
+    # print("input bound: ", x_lo, x_up)
+
+    # Proper bounds for [distance, bearing_error]
+    x_lo = torch.tensor([0.0, -np.pi], dtype=torch.float64)
+    x_up = torch.tensor(
+        [bound_level * 0.02, np.pi], dtype=torch.float64
+    )  # Scale with bound level
     print("input bound: ", x_lo, x_up)
 
     dt = 0.01
+
+    # Equilibrium for point navigation
+    q_equilibrium = torch.tensor([0.0, 0.0], dtype=torch.float64)  # x* = [d=0, theta=0]
+    u_equilibrium = torch.tensor([0.0], dtype=torch.float64)  # u* = [omega=0]
+
+    # (A) Generate data when requested
     if args.generate_dynamics_data:
-        model_dataset = generate_pendulum_dynamics_data(dt)
+        model_dataset = generate_point_nav_dynamics_data(dt=dt, max_v=6.0, u_max=10.0)
+        torch.save(
+            {"input": model_dataset[:][0], "output": model_dataset[:][1]},
+            os.path.join(dir_path, "data", "point_nav_forward_data.pt"),
+        )
+
+    # (B) Or load saved data
     if args.load_dynamics_data is not None:
         data = torch.load(args.load_dynamics_data)
         model_dataset = torch.utils.data.TensorDataset(data["input"], data["output"])
-    # Setup forward dynamics model
-    dynamics_model = utils.setup_relu(
-        (3, 6, 6, 2), params=None, negative_slope=0.01, bias=True, dtype=torch.float64
-    )
-    device = torch.device("cpu")
+
+    # (C) Train φ_dyn using the equilibrium-shifted loss (1a)
     if args.train_forward_model:
         dynamics_relu = utils.setup_relu(
             (3, 8, 8, 2),
@@ -388,19 +398,40 @@ if __name__ == "__main__":
             bias=True,
             dtype=torch.float64,
         )
-        train_forward_model(dynamics_relu, dynamics_dataset, num_epochs=100)
-    else:  # if args.load_forward_model:
-        dynamics_model_path = (
-            dir_path + "/data/preprocess/path_following_unicycle_forward_model.pt"
+        train_forward_model(
+            dynamics_relu,
+            model_dataset,
+            state_equilibrium=q_equilibrium,
+            control_equilibrium=u_equilibrium,
+            num_epochs=200,
+            lr=2e-3,
+            batch_size=256,
         )
-        # dynamics_relu = utils.setup_relu(
-        #     dynamics_model_data["linear_layer_width"],
-        #     params=None,
-        #     negative_slope=dynamics_model_data["negative_slope"],
-        #     bias=dynamics_model_data["bias"],
-        #     dtype=torch.float64)
-        # dynamics_relu.load_state_dict(dynamics_model_data["state_dict"])
-        dynamics_relu = torch.load(dynamics_model_path, map_location=device)
+        torch.save(
+            dynamics_relu, os.path.join(dir_path, "data", "point_nav_forward_model.pt")
+        )
+    else:
+        dynamics_relu = torch.load(
+            os.path.join(dir_path, "data", "point_nav_forward_model.pt"),
+            map_location=torch.device("cpu"),
+        ).double()
+
+    # # (D) Build the NN forward system that *internally* applies (1a) at runtime
+    # x_lo = torch.tensor([0.0, -np.pi], dtype=torch.float64)
+    # x_up = torch.tensor([20.0, np.pi], dtype=torch.float64)
+    # u_lo = torch.tensor([-3.0], dtype=torch.float64)
+    # u_up = torch.tensor([3.0], dtype=torch.float64)
+    # forward_system = relu_system.ReLUSystemGivenEquilibrium(
+    #     torch.float64,
+    #     x_lo,
+    #     x_up,
+    #     u_lo,
+    #     u_up,
+    #     dynamics_relu,
+    #     q_equilibrium,
+    #     u_equilibrium,
+    #     dt=0.02,
+    # )
 
     if args.generate_controller_cost_data:
         state_samples, control_samples, cost_samples = generate_controller_dataset()
@@ -431,7 +462,7 @@ if __name__ == "__main__":
         # controller_relu.load_state_dict(controller_data["state_dict"])
         controller_relu = torch.load(args.load_controller_relu)
 
-    plant = path_following.Path_Following(torch.float64)
+    plant = point_navigation.Point_Stabilization(torch.float64)
     # lqr_gain = plant.lqr_control(np.diag([1., 10.]), np.array([[1.]]))
 
     dtype = torch.float64
@@ -446,11 +477,17 @@ if __name__ == "__main__":
 
     # Now train the controller and Lyapunov function together
     q_equilibrium = torch.tensor([0.0, 0.0], dtype=torch.float64)
-    u_equilibrium = torch.tensor([plant.v], dtype=torch.float64)
+    u_equilibrium = torch.tensor([0.0], dtype=torch.float64)
     # x_lo = torch.tensor([np.pi - 0.1 * np.pi, -0.5], dtype=torch.float64)
     # x_up = torch.tensor([np.pi + 0.1 * np.pi, 0.5], dtype=torch.float64)
     u_lo = torch.tensor([-10], dtype=torch.float64)
     u_up = torch.tensor([10], dtype=torch.float64)
+
+    # --- ENSURE MILP IS CPU-ONLY ---
+    dynamics_relu = dynamics_relu.to("cpu").double().eval()
+    for p in dynamics_relu.parameters():
+        p.requires_grad_(False)
+
     forward_system = relu_system.ReLUSystemGivenEquilibrium(
         torch.float64,
         x_lo,
@@ -489,7 +526,26 @@ if __name__ == "__main__":
         provided_v=S_eig_vec,
     )
 
+    # # Test if the closed-loop system actually stabilizes
+    # print("\n=== Testing Closed-Loop Stability ===")
+    # test_state = torch.tensor([[0.5, 0.5]], dtype=torch.float64)
+    # for i in range(10):
+    #     v_before = lyapunov_relu(test_state).item()
+    #     test_state_next = closed_loop_system.step_forward(test_state)
+    #     v_after = lyapunov_relu(test_state_next).item()
+
+    #     print(f"Step {i}: state={test_state[0].tolist()}, V={v_before:.6f}")
+    #     print(f"  -> next_state={test_state_next[0].tolist()}, V={v_after:.6f}")
+    #     print(f"  -> V_decrease={v_before - v_after:.6f}")
+
+    #     test_state = test_state_next
+
+    #     if torch.norm(test_state).item() < 0.01:
+    #         print("Converged to equilibrium!")
+    #         break
+
     ###############################
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device("cpu")
     actor = controller_relu.to(device).double()
     V = lyapunov_relu.to(device).double()
