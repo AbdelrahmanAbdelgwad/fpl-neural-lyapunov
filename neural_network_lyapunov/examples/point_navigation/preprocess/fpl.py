@@ -124,12 +124,16 @@ class FPLMonotonicLyapunovTrainer:
         V_lambda: float,
         x_equilibrium: torch.Tensor,
         R_options,
+        x_lo,
+        x_up,
     ):
         self.lyapunov_system = lyapunov_system
         self.closed_loop_system = closed_loop_system
         self.V_lambda = V_lambda
         self.x_equilibrium = x_equilibrium
         self.R_options = R_options
+        self.x_lo = x_lo
+        self.x_up = x_up
 
     def rollout_trajectory(self, initial_states: torch.Tensor, horizon: int) -> tuple:
         batch_size, state_dim = initial_states.shape
@@ -146,7 +150,7 @@ class FPLMonotonicLyapunovTrainer:
             batch_size, horizon + 1, device=device, dtype=initial_states.dtype
         )
         u_values = torch.zeros(
-            batch_size, horizon, 1, device=device, dtype=initial_states.dtype
+            batch_size, horizon, 2, device=device, dtype=initial_states.dtype
         )
 
         trajectory[:, 0] = initial_states
@@ -158,14 +162,15 @@ class FPLMonotonicLyapunovTrainer:
 
             # u_t (controller is differentiable)
             u_t = self.closed_loop_system.compute_u_pre(current_states)
-            u_values[:, t, 0] = u_t.squeeze(-1)
+            u_values[:, t] = u_t
 
             # x_{t+1} = f(x_t, u_t)   (NO .detach(); NO in-place)
-            ns = self.closed_loop_system.step_forward(current_states)
-            d = torch.clamp(ns[:, 0:1], min=0.0)
-            th = ((ns[:, 1:2] + torch.pi) % (2 * torch.pi)) - torch.pi
-            next_states = torch.cat((d, th), dim=1)
-
+            ns = self.closed_loop_system.step_forward(current_states)  # [B, 3]
+            next_states = ns.clone()
+            # wrap angle to [-pi, pi] in-place on index 2
+            next_states[:, 2:3] = (
+                (next_states[:, 2:3] + torch.pi) % (2 * torch.pi)
+            ) - torch.pi
             trajectory[:, t + 1] = next_states
             current_states = next_states
 
@@ -174,10 +179,36 @@ class FPLMonotonicLyapunovTrainer:
         return trajectory, V_values, u_values
 
     def _effort_fulfillment(self, u_values):
-        u_values = torch.abs(u_values)
-        u_max = 10.0  # match your controller bounds / dataset
-        u_values = torch.clamp(u_values / u_max, 0, 1)
-        return 1.0 - u_values.mean(dim=1)
+        # u_values: [B, H, u_dim] -> scale to [0,1], average over time & controls
+        u_max = 10.0  # set to your clamp in the controller
+        scaled = torch.clamp(torch.abs(u_values) / u_max, 0, 1)
+        return 1.0 - scaled.mean(dim=(1, 2))  # -> [B]
+
+    # fpl.py  (helper inside the class)
+    def _in_bounds_fulfillment(self, traj):
+        """
+        traj: [B, H+1, state_dim]
+        returns [B] in [0,1] high when all states stay inside [x_lo, x_up]
+        """
+        if (self.x_lo is None) or (self.x_up is None):
+            return torch.ones(traj.shape[0], dtype=traj.dtype, device=traj.device)
+
+        # per-step, per-dim violation (>=0 outside, 0 inside)
+        over = torch.clamp(traj - self.x_up, min=0.0)
+        under = torch.clamp(self.x_lo - traj, min=0.0)
+        viol = over + under  # [B, H+1, D]
+
+        # aggregate across dims by infinity-norm (max violation per step)
+        step_viol = viol.abs().amax(dim=2)  # [B, H+1]
+
+        # turn into fulfillment in [0,1]: 1/(1+α*viol), then AND over time (p=-2)
+        alpha = 10.0
+        per_step_F = 1.0 / (1.0 + alpha * step_viol)  # [B, H+1]
+        # geometric/AND-like aggregate across time
+        F_bounds = (per_step_F.clamp(min=1e-6).prod(dim=1)) ** (
+            1.0 / (per_step_F.shape[1] + 1e-9)
+        )
+        return F_bounds
 
     def compute_lyapunov_value(self, states: torch.Tensor) -> torch.Tensor:
         # ensure 2D: (B,2)
@@ -208,6 +239,8 @@ class FPLMonotonicLyapunovTrainer:
         trajectories, V_values, u_values = self.rollout_trajectory(
             batch_states, horizon
         )
+
+        F_bounds = self._in_bounds_fulfillment(trajectories)  # [B]
 
         V_initial = V_values[:, 0]
         V_final = V_values[:, -1]
@@ -329,29 +362,26 @@ class FPLMonotonicLyapunovTrainer:
 
         # 5) NEW: control-effort fulfillment in [0,1]
         effort_fulfillment = self._effort_fulfillment(u_values)  # [batch]
+        effort_fulfillment = effort_fulfillment**2.0
 
         # Build FPL tree
         fpl_structure = FPLConstraint(
-            p_value=0.0,  # geometric mean at the top
+            p_value=-0.0,
             constraints={
                 "stability": FPLConstraint(
-                    p_value=-2.0,  # AND-like: emphasize the weakest term
+                    p_value=-2.0,
                     constraints={
-                        "decrease": p_mean(decrease_satisfaction, -2.0),
-                        # "positive": p_mean(
-                        #     V_positive, -2.0
-                        # ),  # Always satisfied due to monotonic architecture
-                        # "zero_at_eq": zero_constraint,  # Always satisfied due to monotonic architecture
+                        # "decrease": p_mean(decrease_satisfaction, -6.0),
+                        "v_dot": p_mean(torch.sigmoid(V_decrease * 10), -10.0),
                     },
                 ),
                 "performance": FPLConstraint(
-                    p_value=-2.0,  # geometric mean
+                    p_value=-2.0,
                     constraints={
-                        # "progress": p_mean(progress, -2.0),
-                        "v_dot": p_mean(torch.sigmoid(V_decrease * 10), -2.0),
-                        "effort": p_mean(effort_fulfillment, -2.0),
+                        # "effort": p_mean(effort_fulfillment, -2.0),
                     },
                 ),
+                "in_bounds": p_mean(F_bounds, -2.0),
             },
         )
         # print(f"Effort Fulfillment: {effort_fulfillment}")
@@ -388,7 +418,7 @@ def train_with_fpl(trainer, state_samples, args):
 
             # Compute FPL loss with trajectory rollout
             loss, fpl_structure = trainer.compute_fpl_loss(
-                batch_states, min_horizon=3, max_horizon=30
+                batch_states, min_horizon=20, max_horizon=30
             )
 
             # loss.backward(retain_graph=True)
