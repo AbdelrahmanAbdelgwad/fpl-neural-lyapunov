@@ -19,12 +19,8 @@ source ./config/setup_environments.sh
 # Start timer
 SECONDS=0
 
-python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
-    --bound_level=40 \
-     --train_forward_model \
-     --load_dynamics_data neural_network_lyapunov/examples/point_navigation/data/preprocess/point_nav_forward_data.pt \
-    #  --generate_dynamics_data \
-    
+python neural_network_lyapunov/examples/cart_pole/monotonic_train_cart_pole_demo.py \
+    --bound_level=40 
 
 # Stop timer and report
 duration=$SECONDS

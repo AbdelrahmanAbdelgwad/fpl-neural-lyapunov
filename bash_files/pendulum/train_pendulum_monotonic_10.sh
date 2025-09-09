@@ -19,8 +19,8 @@ source ./config/setup_environments.sh
 # Start timer
 SECONDS=0
 
-    python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
-        --bound_level=40 \
+python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
+    --bound_level=10 
 
 # Stop timer and report
 duration=$SECONDS

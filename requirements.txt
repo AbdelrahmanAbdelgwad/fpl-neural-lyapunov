@@ -6,3 +6,4 @@ pybullet
 cvxpy >= 1.1
 matplotlib >= 3.2
 wandb >= 0.21.0
+torch-optimizer

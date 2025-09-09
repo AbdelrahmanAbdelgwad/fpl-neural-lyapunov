@@ -127,7 +127,7 @@ def main():
         action="store_true",
         help="Set if your model outputs Δx instead of x_next.",
     )
-    parser.add_argument("--dt", type=float, default=0.05)
+    parser.add_argument("--dt", type=float, default=0.01)
     parser.add_argument(
         "--init",
         type=float,
@@ -136,7 +136,7 @@ def main():
         help="Initial [x,y,theta].",
     )
     parser.add_argument("--vmax", type=float, default=10.0)
-    parser.add_argument("--wmax", type=float, default=3.1416)
+    parser.add_argument("--wmax", type=float, default=10.0)
     parser.add_argument(
         "--clamp-bounds",
         action="store_true",
@@ -168,7 +168,7 @@ def main():
 
     # Bounds
     x_lo = np.array([-1.0, -1.0, -math.pi], dtype=float)
-    x_hi = np.array([1.0, 1.0, math.pi], dtype=float)
+    x_up = np.array([1.0, 1.0, math.pi], dtype=float)
 
     # Model
     model = ForwardModel(
@@ -229,18 +229,12 @@ def main():
         x_truth_next = euler_step_unicycle(x_truth, u, args.dt)
 
         # Network
-        try:
-            # x_net_next = model.step(x_net if not mode_compare else x_truth, u)
-            x_net_next = model.step(x_net, u)
-            # NOTE: In compare mode we feed the *same* state to both, so step-by-step deltas are directly comparable.
-        except Exception as e:
-            x_net_next = x_net.copy()  # hold if model missing
-            # You can print once if needed:
-            # print("Model step error:", e)
+        x_net_next = model.step(x_net, u)
+        # NOTE: In compare mode we feed the *same* state to both, so step-by-step deltas are directly comparable.
 
         if args.clamp_bounds:
-            x_truth_next = clamp_state(x_truth_next, x_lo, x_hi)
-            x_net_next = clamp_state(x_net_next, x_lo, x_hi)
+            x_truth_next = clamp_state(x_truth_next, x_lo, x_up)
+            x_net_next = clamp_state(x_net_next, x_lo, x_up)
 
         # Commit
         x_truth = x_truth_next

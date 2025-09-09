@@ -19,8 +19,14 @@ source ./config/setup_environments.sh
 # Start timer
 SECONDS=0
 
-    python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
-        --bound_level=40 \
+for i in {1..10}; do
+    python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
+        --use_fpl \
+        --pretrain_num_epochs=200 \
+        --bound_level=$i \
+        --bound_level_last=$(($i-1)) \
+        # --max_iterations=300 \
+done
 
 # Stop timer and report
 duration=$SECONDS

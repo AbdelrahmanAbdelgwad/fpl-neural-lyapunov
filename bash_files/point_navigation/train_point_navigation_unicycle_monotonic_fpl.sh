@@ -19,14 +19,14 @@ source ./config/setup_environments.sh
 # Start timer
 SECONDS=0
 
-# for i in {1..40}; do
+for i in {1..40..1}; do
     python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
-        --bound_level=40 \
         --use_fpl \
-        # --bound_level=$i \
-        # --bound_level_last=$(($i-1)) \
+        --bound_level=$i \
+        --bound_level_last=$(($i-1))
+        # --bound_level=40 \
         
-# done
+done
 
 # Stop timer and report
 duration=$SECONDS

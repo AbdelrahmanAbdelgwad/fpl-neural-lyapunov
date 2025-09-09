@@ -19,6 +19,15 @@ import argparse
 import os
 
 
+# === FPL INTEGRATION: START (imports) ===
+from neural_network_lyapunov.examples.cart_pole.preprocess.fpl import (
+    FPLMonotonicLyapunovTrainer,
+    train_with_fpl,
+)
+
+# === FPL INTEGRATION: END (imports) ===
+
+
 def rotation_matrix(theta):
     c_theta = np.cos(theta)
     s_theta = np.sin(theta)
@@ -270,7 +279,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
-        default=100,
+        default=50,
         help="number of epochs in pre-training on samples.",
     )
     parser.add_argument(
@@ -296,9 +305,29 @@ if __name__ == "__main__":
     parser.add_argument(
         "--bound_level_last",
         type=int,
-        default=1,
+        default=0,
         help="bound level of x from pre-trained controller and lyapunov.",
     )
+    # === FPL INTEGRATION: START (CLI args) ===
+    parser.add_argument(
+        "--use_fpl",
+        action="store_true",
+        help="Use Follow-the-Perturbed-Leader (FPL) training loop for Lyapunov/controller.",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=5e-4,
+        help="Learning rate used inside train_with_fpl().",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1024,
+        help="Batch size used inside train_with_fpl().",
+    )
+    # === FPL INTEGRATION: END (CLI args) ===
+
     args = parser.parse_args()
 
     args.search_R = True
@@ -317,21 +346,15 @@ if __name__ == "__main__":
         bound_level_last = args.bound_level_last  # bound_level-1
         args.load_controller_relu = (
             dir_path
-            + "/data/monotonic_roa/monotonic_bound"
+            + "/data/monotonic_bound"
             + str(bound_level_last)
             + "_controller.pt"
         )
         args.load_lyapunov_relu = (
-            dir_path
-            + "/data/monotonic_roa/monotonic_bound"
-            + str(bound_level_last)
-            + "_lyapunov.pt"
+            dir_path + "/data/monotonic_bound" + str(bound_level_last) + "_lyapunov.pt"
         )
         args.load_lyapunov_R = (
-            dir_path
-            + "/data/monotonic_roa/monotonic_bound"
-            + str(bound_level_last)
-            + "_R.pt"
+            dir_path + "/data/monotonic_bound" + str(bound_level_last) + "_R.pt"
         )
         print("pre-trained bound level is: ", bound_level_last)
     else:
@@ -537,19 +560,47 @@ if __name__ == "__main__":
     dut.lyapunov_derivative_epsilon = 0.001  # 0.001
     dut.lyapunov_derivative_eps_type = lyapunov.ConvergenceEps.ExpLower
     state_samples_all = utils.get_meshgrid_samples(
-        x_lo, x_up, (51, 51, 51, 51), dtype=torch.float64
+        x_lo, x_up, (26, 26, 26, 26), dtype=torch.float64
     )
     dut.output_flag = True
     dut.search_controller = search_controllerFalg
 
-    if args.train_on_samples:
+    # === FPL INTEGRATION: START (trainer) ===
+    if args.use_fpl:
+        # Build the FPL trainer around your existing hybrid Lyapunov system
+        fpl_trainer = FPLMonotonicLyapunovTrainer(
+            lyapunov_hybrid_system,
+            closed_loop_system,
+            V_lambda,
+            closed_loop_system.x_equilibrium,
+            R_options,
+            x_lo=x_lo,
+            x_up=x_up,
+        )
+
+        # Reuse your dense grid if already defined; otherwise create a sensible default grid
+        state_dim = forward_system.x_equilibrium.numel()
+        if "state_samples_all" not in locals():
+            grid_sizes = (26,) * state_dim  # adjust if needed
+            state_samples_all = utils.get_meshgrid_samples(
+                x_lo, x_up, grid_sizes, dtype=torch.float64
+            )
+
+        # Hand control to the FPL loop (uses args.learning_rate & args.batch_size)
+        train_with_fpl(fpl_trainer, state_samples_all, args)
+
+    elif args.train_on_samples:
         dut.train_lyapunov_on_samples(
             state_samples_all, num_epochs=args.pretrain_num_epochs, batch_size=50
         )
     dut.enable_wandb = args.enable_wandb
-    dut.save_network_path = (
-        dir_path + "/data/monotonic_roa/monotonic_bound" + str(bound_level) + "_"
-    )
+    dut.save_network_path = dir_path + "/data/monotonic_bound" + str(bound_level) + "_"
+
+    # === FPL INTEGRATION: START (save path tweak) ===
+    if args.use_fpl:
+        dut.save_network_path = f"{dut.save_network_path}_fpl"
+    # === FPL INTEGRATION: END (save path tweak) ===
+
     if args.train_adversarial:
         dut.save_network_path += "adversarial_"
         options = train_lyapunov_barrier.Trainer.AdversarialTrainingOptions()

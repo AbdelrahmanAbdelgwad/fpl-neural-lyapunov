@@ -286,7 +286,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
-        default=30,
+        default=100,
         help="number of epochs in pre-training on samples.",
     )
     parser.add_argument(
@@ -323,11 +323,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=0.002,
+        default=0.0005,
         help="Learning rate for FPL training",
     )
     parser.add_argument(
-        "--batch_size", type=int, default=2048, help="Batch size for FPL training"
+        "--batch_size", type=int, default=1024, help="Batch size for FPL training"
     )
 
     args = parser.parse_args()
@@ -475,8 +475,8 @@ if __name__ == "__main__":
     V_lambda = 0.6
     controller_relu = utils.setup_relu(
         # (2, 4, 3, 1),
-        # (3, 8, 8, 2),
-        (3, 4, 4, 2),
+        (3, 8, 8, 2),
+        # (3, 4, 4, 2),
         params=None,
         negative_slope=0.1,
         bias=True,
@@ -701,7 +701,7 @@ if __name__ == "__main__":
         )
     else:
         # print(f"Learning Rate is: {dut.learning_rate}")
-        # dut.learning_rate = 0.003
+        # dut.learning_rate = 0.001
         # dut.learning_rate = 0.01
         dut.lyapunov_positivity_mip_cost_weight = None
         # dut.boundary_value_gap_mip_cost_weight = 0.0

@@ -22,15 +22,17 @@ export PYTHONPATH="${PWD}:${PYTHONPATH}"
 # Run training
 SECONDS=0
 
-for i in {1..40}; do
+for i in {1..10}; do
     if [ "$i" -eq 1 ]; then
-        python neural_network_lyapunov/examples/cart_pole/monotonic_train_cart_pole_demo.py \
+        python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
             --bound_level=$i \
-            --bound_level_last=$(($i-1))
+            --bound_level_last=$(($i-1)) \
+            # --max_iterations=1000
     else
-        python neural_network_lyapunov/examples/cart_pole/monotonic_train_cart_pole_demo.py \
+        python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
             --bound_level=$i \
-            --bound_level_last=$(($i-1))
+            --bound_level_last=$(($i-1)) \
+            # --max_iterations=1000
     fi
 done
 

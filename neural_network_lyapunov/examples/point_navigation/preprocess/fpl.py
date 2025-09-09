@@ -371,17 +371,17 @@ class FPLMonotonicLyapunovTrainer:
                 "stability": FPLConstraint(
                     p_value=-2.0,
                     constraints={
-                        # "decrease": p_mean(decrease_satisfaction, -6.0),
-                        "v_dot": p_mean(torch.sigmoid(V_decrease * 10), -10.0),
+                        "decrease": p_mean(decrease_satisfaction, -10.0),
+                        "v_dot": p_mean(torch.sigmoid(V_decrease * 10), -4.0),
                     },
                 ),
-                "performance": FPLConstraint(
-                    p_value=-2.0,
-                    constraints={
-                        # "effort": p_mean(effort_fulfillment, -2.0),
-                    },
-                ),
-                "in_bounds": p_mean(F_bounds, -2.0),
+                # "performance": FPLConstraint(
+                #     p_value=-2.0,
+                #     constraints={
+                #         "effort": p_mean(effort_fulfillment, -2.0),
+                #     },
+                # ),
+                # "in_bounds": p_mean(F_bounds, -2.0),
             },
         )
         # print(f"Effort Fulfillment: {effort_fulfillment}")
@@ -418,7 +418,7 @@ def train_with_fpl(trainer, state_samples, args):
 
             # Compute FPL loss with trajectory rollout
             loss, fpl_structure = trainer.compute_fpl_loss(
-                batch_states, min_horizon=20, max_horizon=30
+                batch_states, min_horizon=3, max_horizon=min(max(3, int(epoch / 3)), 30)
             )
 
             # loss.backward(retain_graph=True)

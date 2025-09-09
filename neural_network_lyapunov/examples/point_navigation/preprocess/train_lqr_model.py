@@ -26,24 +26,26 @@ def generate_dynamics_data(dt):
     plant = Unicycle(dtype)
 
     # State ranges [x, y, theta]
-    x_range = [-2, 2]
-    y_range = [-2, 2]
+    x_range = [-1, 1]
+    y_range = [-1, 1]
     theta_range = [-np.pi, np.pi]
 
     # Control ranges [v, omega]
-    v_range = [0, 2]
-    omega_range = [-np.pi, np.pi]
+    v_range = [-10.0, +10.0]
+    omega_range = [-10.0, +10.0]
+
+    num_samples = 4000
 
     x_samples = utils.uniform_sample_in_box(
         torch.tensor([x_range[0], y_range[0], theta_range[0]], dtype=dtype),
         torch.tensor([x_range[1], y_range[1], theta_range[1]], dtype=dtype),
-        1000,
+        num_samples,
     ).T
 
     u_samples = utils.uniform_sample_in_box(
         torch.tensor([v_range[0], omega_range[0]], dtype=dtype),
         torch.tensor([v_range[1], omega_range[1]], dtype=dtype),
-        1000,
+        num_samples,
     ).T
 
     xu_tensors = []
@@ -51,7 +53,7 @@ def generate_dynamics_data(dt):
 
     for i in range(x_samples.shape[1]):
         if i % 100 == 0:
-            print(f"Processing sample {i}/1000")
+            print(f"Processing sample {i}/{x_samples.shape[1]}")
         for j in range(u_samples.shape[1]):
             result = scipy.integrate.solve_ivp(
                 lambda t, x: plant.dynamics(x, u_samples[:, j].detach().numpy()),
@@ -86,9 +88,9 @@ def train_forward_model(dynamics_model, model_dataset, num_epochs=20, save_dir=N
         model_dataset,
         dynamics_model,
         compute_next_state,
-        batch_size=500,
+        batch_size=1024,
         num_epochs=num_epochs,
-        lr=0.001,
+        lr=0.0005,
         save_dir=save_dir,
     )
 
@@ -166,6 +168,9 @@ if __name__ == "__main__":
         help="path to load dynamics data",
     )
     parser.add_argument("--train_forward_model", action="store_true")
+    parser.add_argument(
+        "--load_forward_model", default=None, help="path to load forward model"
+    )
     parser.add_argument("--train_lqr_approximator", action="store_true")
     args = parser.parse_args()
 
@@ -185,13 +190,28 @@ if __name__ == "__main__":
 
     # Train forward model
     if args.train_forward_model:
-        print("Training forward model...")
-        # Network: 5 inputs (x,y,theta,v,omega) -> 3 outputs (x',y',theta')
-        dynamics_relu = utils.setup_relu(
-            (5, 16, 16, 8, 3), params=None, negative_slope=0.1, bias=True, dtype=dtype
-        )
+        if args.load_forward_model:
+            dynamics_relu = torch.load(args.load_forward_model).to(
+                device=torch.device("cpu")
+            )
+            dynamics_relu.eval()
+            with torch.no_grad():
+                # Test the loaded model on some data
+                test_input = torch.zeros((5,), dtype=dtype)
+                test_output = dynamics_relu(test_input)
+                print(f"Loaded model test output: {test_output}")
+        else:
+            print("Training forward model...")
+            # Network: 5 inputs (x,y,theta,v,omega) -> 3 outputs (x',y',theta')
+            dynamics_relu = utils.setup_relu(
+                (5, 16, 16, 8, 3),
+                params=None,
+                negative_slope=0.1,
+                bias=True,
+                dtype=dtype,
+            )
         save_path = os.path.join(
-            dir_path, "..", "data", "preprocess", "unicycle_forward_model.pt"
+            dir_path, "..", "data", "preprocess", "point_nav_forward_model.pt"
         )
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         train_forward_model(
@@ -215,8 +235,8 @@ if __name__ == "__main__":
         K = torch.from_numpy(K)
 
         # State bounds for training
-        x_lo = torch.tensor([-1.0, -1.0, -np.pi / 2], dtype=dtype)
-        x_up = torch.tensor([1.0, 1.0, np.pi / 2], dtype=dtype)
+        x_lo = torch.tensor([-1.0, -1.0, -np.pi], dtype=dtype)
+        x_up = torch.tensor([1.0, 1.0, np.pi], dtype=dtype)
 
         # Controller network: 3 inputs -> 2 outputs
         controller_relu = utils.setup_relu(

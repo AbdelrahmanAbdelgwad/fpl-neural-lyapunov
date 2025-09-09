@@ -1374,6 +1374,9 @@ def train_approximator(
             optimizer.step()
 
             running_loss += batch_loss.item()
+
+            # if verbose and i % 100 == 0:  # print every 100 mini-batches
+            #     print(f"epoch {epoch} mini-batch {i} loss {batch_loss.item()}")
         test_input_samples, test_target = test_set[:]
         test_input_samples = test_input_samples.to(device)
         test_target = test_target.to(device)
