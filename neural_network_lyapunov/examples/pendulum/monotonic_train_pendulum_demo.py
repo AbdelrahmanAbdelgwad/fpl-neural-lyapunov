@@ -9,7 +9,10 @@ import neural_network_lyapunov.r_options as r_options
 # import neural_network_lyapunov.monotonic_lyapunov.custom_train_lyapunov_barrier as train_lyapunov_barrier
 # import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils as monotonic_utils
 import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
+
 import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
+
+# import neural_network_lyapunov.monotonic_lyapunov_init.train_lyapunov_barrier_avg as train_lyapunov_barrier
 import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
 
 import torch
@@ -25,6 +28,25 @@ from neural_network_lyapunov.examples.pendulum.preprocess.fpl import (
 )
 
 # === FPL INTEGRATION: END (imports) ===
+
+import random
+
+
+def set_all_seeds(seed: int = 0):
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception:
+        pass
+
+
+set_all_seeds(0)
 
 
 def rotation_matrix(theta):
@@ -285,6 +307,12 @@ if __name__ == "__main__":
         help="path of the controller relu state_dict()",
     )
     parser.add_argument(
+        "--load_lyapunov_R",
+        type=str,
+        default=None,  # dir_path+"/data/pendulum_controller4.pt",#None,
+        help="path of the controller relu state_dict()",
+    )
+    parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
         default=200,
@@ -342,6 +370,7 @@ if __name__ == "__main__":
         args.load_controller_relu = (
             dir_path + "/data/monotonic_V06/monotonic_bound10_controller.pt"
         )
+
     add_l1_stateFalg = False  # True
     lyap_v_symm_flag = False
     bound_level = args.bound_level
@@ -358,6 +387,10 @@ if __name__ == "__main__":
         args.load_lyapunov_relu = (
             dir_path
             + f"/data/monotonic_bound{bound_level_last}{suffix}/monotonic_bound{bound_level_last}{suffix}_lyapunov.pt"
+        )
+        args.load_lyapunov_R = (
+            dir_path
+            + f"/data/monotonic_bound{bound_level_last}{suffix}/monotonic_bound{bound_level_last}{suffix}_R.pt"
         )
         print("pre-trained bound level is: ", bound_level_last)
     print("pretrained lyapunov path: ", args.load_lyapunov_relu)
@@ -446,7 +479,12 @@ if __name__ == "__main__":
         dt,
     )
 
-    R = torch.cat((rotation_matrix(np.pi / 4), rotation_matrix(np.pi / 10)), dim=0)
+    if args.load_lyapunov_R is not None:
+        R = torch.load(args.load_lyapunov_R)
+        print("Loaded R is: ", R)
+    else:
+        R = torch.cat((rotation_matrix(np.pi / 4), rotation_matrix(np.pi / 10)), dim=0)
+        print("Initialized R is: ", R)
     # R = torch.zeros_like(R)
     # lyapunov_relu = utils.setup_relu((2, 8, 8, 6, 1),
     #                                 params=None,
@@ -519,6 +557,12 @@ if __name__ == "__main__":
     )
     dut.output_flag = True
     dut.search_controller = search_controllerFalg
+
+    ##### Average Modification #####
+    # dut.lyapunov_derivative_mip_pool_solutions = 1  # e.g., 4–16 is a good start
+    # dut.lyapunov_derivative_mip_reduction = "max"  # << use mean in the training loss
+    # dut.learning_rate = 5e-3
+    ##### Average Modification #####
 
     # === FPL INTEGRATION: START (trainer) ===
     if args.use_fpl:

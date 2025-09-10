@@ -210,6 +210,50 @@ class FPLMonotonicLyapunovTrainer:
         )
         return F_bounds
 
+    def _monotonic_fulfillment(self) -> torch.Tensor:
+        """
+        Returns a scalar in [0,1] that rewards being comfortably above the
+        layer constraints:
+        - case=1: b_input >= 0.1  (we reward margin = b_input - 0.1)
+        - case=2: a_input >= 0    (we reward a_input), and also the
+            *effective* slopes a >= epsilon  (we reward margin = min(a) - epsilon)
+        """
+        relu = self.lyapunov_system.lyapunov_relu
+        layer_scores = []
+
+        for layer in relu:
+            # Only care about our custom monotonic layers
+            if not hasattr(layer, "case"):
+                continue
+
+            # CASE 1 (bias/partition layer): reward b_input − 0.1
+            if getattr(layer, "case", None) == 1 and hasattr(layer, "b_input"):
+                # margin per element
+                margin_b = layer.b_input - 0.1
+                # map margin -> [0,1] smoothly; higher margin -> closer to 1
+                F_b = torch.sigmoid(10.0 * margin_b).mean()
+                layer_scores.append(F_b)
+
+            # CASE 2 (slope layer): reward both raw and effective slopes
+            if getattr(layer, "case", None) == 2 and hasattr(layer, "a_input"):
+                # raw nonnegativity (how far above 0 the unconstrained params sit)
+                F_raw = torch.sigmoid(10.0 * layer.a_input).mean()
+                # effective slopes 'a' are computed by the layer; reward min(a) − epsilon
+                if hasattr(layer, "a") and hasattr(layer, "epsilon"):
+                    margin_eff = layer.a.min() - layer.epsilon
+                    F_eff = torch.sigmoid(10.0 * margin_eff)
+                    F_layer = 0.5 * (F_raw + F_eff)
+                else:
+                    F_layer = F_raw
+                layer_scores.append(F_layer)
+
+        if not layer_scores:
+            # If no monotonic layers are present, treat as satisfied.
+            return torch.tensor(1.0, dtype=self.x_lo.dtype)
+
+        return torch.stack(layer_scores).mean()
+
+
     def compute_lyapunov_value(self, states: torch.Tensor) -> torch.Tensor:
         # ensure 2D: (B,2)
         if states.dim() == 1:
@@ -335,17 +379,12 @@ class FPLMonotonicLyapunovTrainer:
 
         # saturate the penalty to be betwenen 0 and 1 without clipping gradients
         lyap_decay_loss = torch.tanh(0.005 * lyap_decay_loss)
-        # N = 100 / 8
-        # lyap_decay_loss = N / (N + lyap_decay_loss)
-        # lyap_decay_loss = torch.clamp(lyap_decay_loss, 0.0, 1.0)
         decrease_satisfaction = 1.0 - lyap_decay_loss
 
-        # (Optional) metric: fraction of states satisfying the constraint
-        frac_satisfied = (
-            (V_f <= target_final).float().mean()
-            if V_i.numel() > 0
-            else V_initial.new_tensor(1.0)
-        )
+        v_dot_fulfillment = torch.sigmoid(V_decrease * 10)
+        # N = 10.0
+        # v_dot_fulfillment = 1.5 - N / (N + V_decrease)
+        # v_dot_fulfillment = v_dot_fulfillment.clamp(min=0.0, max=1.0)
 
         # 2) Lyapunov Positivity Constraint
         # V should be positive away from equilibrium
@@ -368,32 +407,51 @@ class FPLMonotonicLyapunovTrainer:
         effort_fulfillment = self._effort_fulfillment(u_values)  # [batch]
         effort_fulfillment = effort_fulfillment**2.0
 
+        # 6) Monotonic architecture fulfillment
+        monotonic_F = self._monotonic_fulfillment()
+        # broadcast to [B] so shapes match the rest of the FPL terms
+        monotonic_F = torch.ones_like(V_decrease) * monotonic_F
+
+
         # Build FPL tree
         fpl_structure = FPLConstraint(
-            p_value=-0.0,
+            p_value=-2.0,
             constraints={
                 "stability": FPLConstraint(
                     p_value=-2.0,
                     constraints={
-                        "decrease": p_mean(decrease_satisfaction, -4.0),
-                        "v_dot": p_mean(torch.sigmoid(V_decrease * 10), -6.0),
+                        "decrease": p_mean(decrease_satisfaction, -6.0),
+                        "v_dot": p_mean(v_dot_fulfillment, -6.0),
                     },
                 ),
-                # "performance": FPLConstraint(
-                #     p_value=-2.0,
-                #     constraints={
-                #         # "effort": p_mean(effort_fulfillment, -2.0),
-                #         "performance": p_mean(progress, -2.0),
-                #     },
-                # ),
-                # "in_bounds": p_mean(F_bounds, -2.0),
+                # "architecture": p_mean(monotonic_F, -2.0),  
+            #     "performance": FPLConstraint(
+            #         p_value=-2.0,
+            #         constraints={
+            #             # "effort": p_mean(effort_fulfillment, -2.0),
+            #             "performance": p_mean(progress, -2.0),
+            #         },
+            #     ),
+            #     "in_bounds": p_mean(F_bounds, -2.0),
             },
         )
-        # print(f"Effort Fulfillment: {effort_fulfillment}")
 
+        # Use this for the actual loss (keeps gradients)
         fulfillment = fpl_structure.evaluate()
         loss = 1.0 - fulfillment
-        return loss, fpl_structure
+
+        # Build a DETACHED copy purely for logging/printing
+        def _detached_tree(c):
+            if isinstance(c, torch.Tensor):
+                return c.detach()
+            if isinstance(c, FPLConstraint):
+                return FPLConstraint(c.p_value, {k: _detached_tree(v) for k, v in c.constraints.items()})
+            return c
+
+        fpl_structure_log = _detached_tree(fpl_structure)
+
+        return loss, fpl_structure_log
+
 
 
 def train_with_fpl(trainer, state_samples, args):
@@ -415,6 +473,7 @@ def train_with_fpl(trainer, state_samples, args):
         dataset, batch_size=args.batch_size, shuffle=True
     )
 
+
     for epoch in range(args.pretrain_num_epochs):
         epoch_losses = []
 
@@ -424,8 +483,9 @@ def train_with_fpl(trainer, state_samples, args):
             # Compute FPL loss with trajectory rollout
             loss, fpl_structure = trainer.compute_fpl_loss(
                 batch_states,
-                min_horizon=10,
-                # max_horizon=min(max(int(epoch / 3), 10), 50),
+                # min_horizon=3,
+                min_horizon=min(epoch // 3 + 3, 30),
+                # max_horizon=min(max(int(epoch / 3), 10), 30),
                 max_horizon=30,
             )
 
@@ -453,7 +513,8 @@ def train_with_fpl(trainer, state_samples, args):
         print(f"Epoch {epoch} Average Fulfillment: {1 - avg_loss:.4f}")
 
         # Early stopping if converged
-        if (1 - avg_loss) >= (min(0.94 + args.bound_level / 100, 0.995)):
+        # if (1 - avg_loss) >= (min(0.94 + args.bound_level / 100, 0.995)):
+        if (1 - avg_loss) >= 0.98:
             print("Converged!")
             break
 

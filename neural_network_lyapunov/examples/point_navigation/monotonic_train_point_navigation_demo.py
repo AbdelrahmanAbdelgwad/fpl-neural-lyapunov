@@ -286,7 +286,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
-        default=100,
+        default=200,
         help="number of epochs in pre-training on samples.",
     )
     parser.add_argument(
@@ -323,11 +323,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=0.0005,
+        default=5e-3,
         help="Learning rate for FPL training",
     )
     parser.add_argument(
-        "--batch_size", type=int, default=1024, help="Batch size for FPL training"
+        "--batch_size", type=int, default=64, help="Batch size for FPL training"
     )
 
     args = parser.parse_args()
@@ -656,9 +656,11 @@ if __name__ == "__main__":
             x_lo=x_lo,
             x_up=x_up,
         )
-
+        state_samples_all_fpl = utils.get_meshgrid_samples(
+            x_lo, x_up, (15, 15, 15), dtype=torch.float64
+        )
         # Train with FPL
-        train_with_fpl(fpl_trainer, state_samples_all, args)
+        train_with_fpl(fpl_trainer, state_samples_all_fpl, args)
 
     elif args.train_on_samples:
         dut.train_lyapunov_on_samples(

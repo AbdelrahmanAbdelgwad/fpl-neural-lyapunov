@@ -5,15 +5,14 @@ import copy
 import wandb
 import inspect
 import time
+import os
 import neural_network_lyapunov.hybrid_linear_system as hybrid_linear_system
-import neural_network_lyapunov.lyapunov as lyapunov
+import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_lyapunov as custom_lyapunov
 import neural_network_lyapunov.barrier as barrier
 import neural_network_lyapunov.feedback_system as feedback_system
 import neural_network_lyapunov.utils as utils
 import neural_network_lyapunov.r_options as r_options
 import neural_network_lyapunov.gurobi_torch_mip as gurobi_torch_mip
-
-# import neural_network_lyapunov.examples.unicycle_with_offset.unicycle_feedback_system as unicycle_feedback_system
 
 
 class Trainer:
@@ -61,7 +60,7 @@ class Trainer:
         # self.lyapunov_derivative_epsilon is different. To prove exponential
         # convergence, use ExpLower (or ExpUpper) to prove the exponential
         # convergence rate. To prove asymptotic convergence, use Asymp
-        self.lyapunov_derivative_eps_type = lyapunov.ConvergenceEps.ExpLower
+        self.lyapunov_derivative_eps_type = custom_lyapunov.ConvergenceEps.ExpLower
 
         # The convergence tolerance for the training.
         # When the lyapunov function
@@ -160,9 +159,14 @@ class Trainer:
         # require solving some MIPs).
         self.derivative_mip_strengthen_binary = False
 
+        ##### Average Modification #####
+        # how to reduce the derivative MIP loss across solution pool: "max" or "mean"
+        self.lyapunov_derivative_mip_reduction = "max"
+        ##### Average Modification #####
+
     def add_lyapunov(
         self,
-        lyapunov_hybrid_system: lyapunov.LyapunovHybridLinearSystem,
+        lyapunov_hybrid_system: custom_lyapunov.LyapunovHybridLinearSystem,
         V_lambda,
         x_equilibrium,
         R_options,
@@ -463,6 +467,12 @@ class Trainer:
                 gurobipy.GRB.Param.PoolSolutions,
                 self.lyapunov_derivative_mip_pool_solutions,
             )
+            ##### Average Modification #####
+            lyapunov_derivative_mip.gurobi_model.setParam(
+                gurobipy.GRB.Param.PoolSearchMode, 2
+            )
+            ##### Average Modification #####
+
         if self.lyapunov_derivative_mip_term_threshold is not None:
             lyapunov_derivative_mip.gurobi_model.optimize(
                 utils.get_gurobi_terminate_if_callback(
@@ -921,10 +931,41 @@ class Trainer:
             lyap_derivative_mip_cost_weight != 0
             and lyap_derivative_mip_cost_weight is not None
         ):
-            mip_cost = lyap_derivative_mip.compute_objective_from_mip_data_and_solution(
-                solution_number=0, penalty=1e-13
+
+            ##### Average Modification #####
+            # mip_cost = lyap_derivative_mip.compute_objective_from_mip_data_and_solution(
+            #     solution_number=0, penalty=1e-13
+            # )
+            # lyap_loss.derivative_mip_loss = lyap_derivative_mip_cost_weight * mip_cost
+            # collect objective values for all solutions in the pool
+            sol_count = min(
+                self.lyapunov_derivative_mip_pool_solutions,
+                lyap_derivative_mip.gurobi_model.solCount,
             )
+
+            if sol_count == 0:
+                mip_cost = torch.tensor(0.0, dtype=dtype)
+            else:
+                costs = []
+                for s in range(sol_count):
+                    lyap_derivative_mip.gurobi_model.setParam(
+                        gurobipy.GRB.Param.SolutionNumber, s
+                    )
+                    costs.append(
+                        lyap_derivative_mip.compute_objective_from_mip_data_and_solution(
+                            solution_number=s, penalty=1e-13
+                        )
+                    )
+                costs = torch.stack(costs)
+                if self.lyapunov_derivative_mip_reduction == "mean":
+                    mip_cost = costs.mean()
+                else:
+                    # default behavior – "max" (first solution is the best/worst one)
+                    mip_cost = costs[0]
+
             lyap_loss.derivative_mip_loss = lyap_derivative_mip_cost_weight * mip_cost
+            ##### Average Modification #####
+
         lyap_loss.gap_mip_loss = 0
         if boundary_value_gap_mip_cost_weight != 0:
             boundary_value_gap, V_min_milp, V_max_milp, x_min, x_max = (
@@ -1012,39 +1053,45 @@ class Trainer:
                         "total training time: ", round(time_used / 60.0, 2), "minutes"
                     )
                 dict = {"loss_history": loss_history, "total_training_time": time_used}
-                npy_path = self.save_network_path + f'{"loss_history.npy"}'
+                npy_path = (
+                    self.save_network_path
+                    + "/"
+                    + self.save_network_path.split("/")[-1]
+                    + f'{"_loss_history.npy"}'
+                )
                 with open(npy_path, "wb") as file_path:
                     np.save(file_path, dict)
 
     def _save_network(self, iter_count, endFlag_save=False):
         if self.save_network_path:
+            # Create the directory if it does not exist
+            os.makedirs(self.save_network_path, exist_ok=True)
             if iter_count % self.save_network_iterations == 0 or endFlag_save:
                 if endFlag_save:
                     print("save the best model at the end")
                 torch.save(
                     self.lyapunov_hybrid_system.lyapunov_relu,
-                    self.save_network_path + f'{"lyapunov.pt"}',
+                    self.save_network_path
+                    + "/"
+                    + self.save_network_path.split("/")[-1]
+                    + f'{"_lyapunov.pt"}',
                 )
-                torch.save(self.R_options.R(), self.save_network_path + f'{"R.pt"}')
-
+                torch.save(
+                    self.R_options.R(),
+                    self.save_network_path
+                    + "/"
+                    + self.save_network_path.split("/")[-1]
+                    + f'{"_R.pt"}',
+                )
                 if isinstance(
-                    self.lyapunov_hybrid_system.system,
-                    unicycle_feedback_system.UnicycleFeedbackSystem,
-                ):
-                    torch.save(
-                        self.lyapunov_hybrid_system.system.controller_network,
-                        self.save_network_path + f'{"controller.pt"}',
-                    )
-                    torch.save(
-                        self.lyapunov_hybrid_system.system.Ru_options.R(),
-                        self.save_network_path + f'{"Ru.pt"}',
-                    )
-                elif isinstance(
                     self.lyapunov_hybrid_system.system, feedback_system.FeedbackSystem
                 ):
                     torch.save(
                         self.lyapunov_hybrid_system.system.controller_network,
-                        self.save_network_path + f'{"controller.pt"}',
+                        self.save_network_path
+                        + "/"
+                        + self.save_network_path.split("/")[-1]
+                        + f'{"_controller.pt"}',
                     )
 
     def print(self):
@@ -1113,11 +1160,10 @@ class Trainer:
             )
         else:
             raise Exception("train: unknown optimizer, only support Adam or SGD.")
-        scheduler_milestones = [5000]  # , 1000]#,2000,3000]
-        # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
-        #                                                  milestones=scheduler_milestones,
-        #                                                  gamma=0.34)
-        # # 0.003 #0.0015 0.00075 0.000375 0.0001875
+        scheduler_milestones = [5000]  # [200, 1000,2000,3000]
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer, milestones=scheduler_milestones, gamma=0.5
+        )
         best_derivative_mip_cost = np.inf
         best_training_params = None
         loss_values = []
@@ -1182,46 +1228,70 @@ class Trainer:
                     + f"{total_loss_return.lyap_loss.derivative_mip_obj}"
                 )
             loss_values.append(total_loss_return.loss.detach())
+            # if self.lyapunov_positivity_mip_cost_weight is None:
+            #     total_loss_return.lyap_loss.positivity_mip_obj = 0.
             if (
-                total_loss_return.lyap_loss.positivity_mip_obj
-                <= self.lyapunov_positivity_convergence_tol
-                and total_loss_return.lyap_loss.derivative_mip_obj
-                <= self.lyapunov_derivative_convergence_tol
+                total_loss_return.lyap_loss.derivative_mip_obj
+                < self.lyapunov_derivative_convergence_tol
             ):
-                self._save_network(iter_count, endFlag_save=True)
-                self._save_loss_history(
-                    iter_count,
-                    loss_values,
-                    time.time() - train_start_time,
-                    endFlag_save=True,
-                )
-                return (
-                    True,
-                    total_loss_return.loss.item(),
-                    total_loss_return.lyap_loss.positivity_mip_obj,
-                    total_loss_return.lyap_loss.derivative_mip_obj,
-                )
+                if self.lyapunov_positivity_mip_cost_weight is None:
+                    self._save_network(iter_count, endFlag_save=True)
+                    self._save_loss_history(
+                        iter_count,
+                        loss_values,
+                        time.time() - train_start_time,
+                        endFlag_save=True,
+                    )
+                    return (
+                        True,
+                        total_loss_return.loss.item(),
+                        total_loss_return.lyap_loss.positivity_mip_obj,
+                        total_loss_return.lyap_loss.derivative_mip_obj,
+                    )
+                elif (
+                    total_loss_return.lyap_loss.positivity_mip_obj
+                    <= self.lyapunov_positivity_convergence_tol
+                ):
+                    self._save_network(iter_count, endFlag_save=True)
+                    self._save_loss_history(
+                        iter_count,
+                        loss_values,
+                        time.time() - train_start_time,
+                        endFlag_save=True,
+                    )
+                    return (
+                        True,
+                        total_loss_return.loss.item(),
+                        total_loss_return.lyap_loss.positivity_mip_obj,
+                        total_loss_return.lyap_loss.derivative_mip_obj,
+                    )
             if (
-                total_loss_return.lyap_loss.positivity_mip_obj
-                < self.lyapunov_positivity_convergence_tol
-                and total_loss_return.lyap_loss.derivative_mip_obj
+                total_loss_return.lyap_loss.derivative_mip_obj
                 < best_derivative_mip_cost
             ):
-                best_training_params = [p.clone() for p in training_params]  # noqa
-                best_derivative_mip_cost = (
-                    total_loss_return.lyap_loss.derivative_mip_obj
-                )
-            total_loss_return.loss.backward()
+                if self.lyapunov_positivity_mip_cost_weight is None:
+                    best_training_params = [p.clone() for p in training_params]  # noqa
+                    best_derivative_mip_cost = (
+                        total_loss_return.lyap_loss.derivative_mip_obj
+                    )
+                elif (
+                    total_loss_return.lyap_loss.positivity_mip_obj
+                    < self.lyapunov_positivity_convergence_tol
+                ):
+                    best_training_params = [p.clone() for p in training_params]  # noqa
+                    best_derivative_mip_cost = (
+                        total_loss_return.lyap_loss.derivative_mip_obj
+                    )
+
+            total_loss_return.loss.backward(retain_graph=True)
             optimizer.step()
             iter_count += 1
 
             before_lr = optimizer.param_groups[0]["lr"]
-            # scheduler.step()
+            scheduler.step()
             if iter_count in scheduler_milestones:
                 after_lr = optimizer.param_groups[0]["lr"]
-                print(
-                    "Itern %d: Adam lr %.4f -> %.4f" % (iter_count, before_lr, after_lr)
-                )
+
         return (
             False,
             total_loss_return.loss.item(),
@@ -1281,7 +1351,7 @@ class Trainer:
                     lyap_derivative_mip_cost_weight=None,
                     boundary_value_gap_mip_cost_weight=0,
                 )
-                total_loss_return.loss.backward()
+                total_loss_return.loss.backward(retain_graph=True)
                 optimizer.step()
                 running_loss += total_loss_return.loss.item()
 
@@ -1313,26 +1383,29 @@ class Trainer:
             )
             if test_loss.item() < best_loss:
                 best_loss = test_loss.item()
-                best_lyapunov_relu = copy.deepcopy(
-                    self.lyapunov_hybrid_system.lyapunov_relu
-                )
+                # ---- keep a leaf-tensor snapshot (safe for every PyTorch version) ----
+                best_lyapunov_state = {
+                    k: v.detach().clone()
+                    for k, v in self.lyapunov_hybrid_system.lyapunov_relu.state_dict().items()
+                }
                 if isinstance(
                     self.lyapunov_hybrid_system.system, feedback_system.FeedbackSystem
                 ):
-                    best_controller_relu = copy.deepcopy(
-                        self.lyapunov_hybrid_system.system.controller_network
-                    )
+                    best_controller_state = {
+                        k: v.detach().clone()
+                        for k, v in self.lyapunov_hybrid_system.system.controller_network.state_dict().items()
+                    }
 
-        print(f"best loss {best_loss}")
-        self.lyapunov_hybrid_system.lyapunov_relu.load_state_dict(
-            best_lyapunov_relu.state_dict()
-        )
-        if isinstance(
-            self.lyapunov_hybrid_system.system, feedback_system.FeedbackSystem
-        ):
-            self.lyapunov_hybrid_system.system.controller_network.load_state_dict(
-                best_controller_relu.state_dict()
+            print(f"best loss {best_loss}")
+            self.lyapunov_hybrid_system.lyapunov_relu.load_state_dict(
+                best_lyapunov_state
             )
+            if isinstance(
+                self.lyapunov_hybrid_system.system, feedback_system.FeedbackSystem
+            ):
+                self.lyapunov_hybrid_system.system.controller_network.load_state_dict(
+                    best_controller_state
+                )
 
     class AdversarialTrainingOptions:
         def __init__(self):
@@ -1473,7 +1546,7 @@ class Trainer:
                     )
                 )
                 batch_loss = positivity_sample_loss + derivative_sample_loss
-                batch_loss.backward()
+                batch_loss.backward(retain_graph=True)
                 optimizer.step()
 
             derivative_state_samples_next_all = (
@@ -1641,6 +1714,7 @@ class Trainer:
                 derivative_state_repeatition = derivative_state_repeatition[
                     -options.derivative_samples_pool_size :
                 ]
+            loss_values.append(lyapunov_derivative_mip_obj)
             if self.output_flag:
                 print(
                     f"Iter {iter_count}, positivity cost "
@@ -1656,9 +1730,6 @@ class Trainer:
                         "time": time.time() - train_start_time,
                     }
                 )
-            loss_values.append(
-                lyapunov_positivity_mip_obj + lyapunov_derivative_mip_obj
-            )
             if (
                 lyapunov_positivity_mip_obj < self.lyapunov_positivity_convergence_tol
                 and lyapunov_derivative_mip_obj
@@ -1736,7 +1807,7 @@ class TrainValueApproximator:
             loss = torch.nn.MSELoss()(value_relu, value_samples_all)
             if loss.item() <= self.convergence_tolerance:
                 return True, loss.item()
-            loss.backward()
+            loss.backward(retain_graph=True)
             optimizer.step()
         return False, loss.item()
 

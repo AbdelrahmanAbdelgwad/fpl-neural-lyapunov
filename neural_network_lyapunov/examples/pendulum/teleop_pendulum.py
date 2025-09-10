@@ -366,7 +366,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default=None,
+        default="neural_network_lyapunov/examples/pendulum/data/pendulum_second_order_forward_relu.pt",
         help="Path to torch model (φ: [theta, thetadot, u]->x_next).",
     )
     parser.add_argument("--dt", type=float, default=0.01, help="Simulation timestep.")
@@ -381,7 +381,7 @@ def main():
         "--init",
         type=float,
         nargs=2,
-        default=[0.1, 0.0],
+        default=[0.5, 0.0],
         help="Initial [theta, thetadot].",
     )
 
@@ -399,7 +399,7 @@ def main():
     parser.add_argument(
         "--controller",
         type=str,
-        default="keyboard",
+        default="NN",
         choices=["keyboard", "lqr", "energy", "pid", "zero", "NN"],
         help="Controller type.",
     )
@@ -472,7 +472,7 @@ def main():
         # "neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_controller.pt"
         # "neural_network_lyapunov/examples/pendulum/data/pendulum_controller4.pt"
         # "neural_network_lyapunov/examples/examples_in_paper/pendulum/controller19.pt"
-        controller_path = "neural_network_lyapunov/examples/pendulum/data/monotonic_bound5_fpl/monotonic_bound5_fpl_controller.pt"
+        controller_path = "neural_network_lyapunov/examples/pendulum/data/monotonic_bound5/monotonic_bound10_controller.pt"
         try:
 
             controller_relu = torch.load(controller_path)
