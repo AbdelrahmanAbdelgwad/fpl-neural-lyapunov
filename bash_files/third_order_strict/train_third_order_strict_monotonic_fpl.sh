@@ -19,7 +19,7 @@ source ./config/setup_environments.sh
 # Start timer
 SECONDS=0
 
-for i in {1..10}; do
+for i in {1..50}; do
     python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
         --search_R \
         --use_fpl \

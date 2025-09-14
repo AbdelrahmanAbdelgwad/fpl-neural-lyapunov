@@ -19,14 +19,27 @@ source ./config/setup_environments.sh
 # Start timer
 SECONDS=0
 
-# for i in {1..40..1}; do
-    python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
+CKPT_DIR="neural_network_lyapunov/examples/point_navigation/data/monotonic_bound40_fpl"
+
+
+python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
         --use_fpl \
         --bound_level=40 \
-        # --bound_level=$i \
-        # --bound_level_last=$(($i-1))
-          
-# done
+        --max_iterations=1 \
+
+for i in {1..40}; do
+    if [ "$i" -eq 1 ]; then
+        python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
+            --bound_level=$i \
+            --load_lyapunov_relu="${CKPT_DIR}/monotonic_bound40_fpl_lyapunov.pt" \
+            --load_controller_relu="${CKPT_DIR}/monotonic_bound40_fpl_controller.pt" \
+            --load_lyapunov_R="${CKPT_DIR}/monotonic_bound40_fpl_R.pt"
+    else
+        python neural_network_lyapunov/examples/point_navigation/monotonic_train_point_navigation_demo.py \
+            --bound_level=$i \
+            --bound_level_last=$(($i-1))
+    fi
+done
 
 # Stop timer and report
 duration=$SECONDS

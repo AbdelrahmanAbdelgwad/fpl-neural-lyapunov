@@ -259,17 +259,20 @@ def create_pid_controller(
     return controller
 
 
-def create_monotonic_controller(model: nn.Module) -> Callable:
-    """Create a monotonic controller using a neural network."""
+def create_monotonic_controller(model, x_eq=(math.pi, 0.0), u_eq=0.0) -> Callable:
+    """Monotonic NN controller centered at equilibrium: u = φ(x) - φ(x*) + u*."""
+    with torch.no_grad():
+        xeq_t = torch.tensor(x_eq, dtype=torch.double).unsqueeze(0)
+        phi_eq = model(xeq_t).squeeze()
 
     def controller(x: np.ndarray) -> float:
-        # Forward pass through the model
         with torch.no_grad():
-            input_tensor = torch.tensor(x, dtype=torch.double).unsqueeze(0)
-            output = model(input_tensor)
-            return float(output)
+            xin = torch.tensor(x, dtype=torch.double).unsqueeze(0)
+            u_pre = model(xin).squeeze() - phi_eq + u_eq
+            return float(u_pre)
 
     return controller
+
 
 
 @dataclass
@@ -366,7 +369,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="neural_network_lyapunov/examples/pendulum/data/pendulum_second_order_forward_relu.pt",
+        default="neural_network_lyapunov/examples/pendulum/data/pendulum_second_order_forward_relu2.pt",
         help="Path to torch model (φ: [theta, thetadot, u]->x_next).",
     )
     parser.add_argument("--dt", type=float, default=0.01, help="Simulation timestep.")
@@ -472,7 +475,7 @@ def main():
         # "neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_controller.pt"
         # "neural_network_lyapunov/examples/pendulum/data/pendulum_controller4.pt"
         # "neural_network_lyapunov/examples/examples_in_paper/pendulum/controller19.pt"
-        controller_path = "neural_network_lyapunov/examples/pendulum/data/monotonic_bound5/monotonic_bound10_controller.pt"
+        controller_path = "neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_controller.pt"
         try:
 
             controller_relu = torch.load(controller_path)

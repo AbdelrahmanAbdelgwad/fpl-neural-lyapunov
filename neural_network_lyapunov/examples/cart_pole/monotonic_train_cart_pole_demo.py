@@ -5,13 +5,19 @@ import neural_network_lyapunov.feedback_system as feedback_system
 import neural_network_lyapunov.relu_system as relu_system
 import neural_network_lyapunov.train_utils as train_utils
 import neural_network_lyapunov.r_options as r_options
-import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_lyapunov as lyapunov
-import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_train_lyapunov_barrier as train_lyapunov_barrier
-import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils as monotonic_utils
+
+# import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_lyapunov as lyapunov
+# import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_train_lyapunov_barrier as train_lyapunov_barrier
+# import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils as monotonic_utils
 
 # import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
 # import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
 # import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
+
+import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
+import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
+import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
+
 import torch
 import scipy.integrate
 import numpy as np
@@ -277,9 +283,15 @@ if __name__ == "__main__":
         help="path of the controller relu state_dict()",
     )
     parser.add_argument(
+        "--load_lyapunov_R",
+        type=str,
+        default=None,  # dir_path+"/data/pendulum_controller4.pt",#None,
+        help="path of the controller relu state_dict()",
+    )
+    parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
-        default=50,
+        default=200,
         help="number of epochs in pre-training on samples.",
     )
     parser.add_argument(
@@ -317,20 +329,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=5e-4,
+        default=5e-3,
         help="Learning rate used inside train_with_fpl().",
     )
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=1024,
+        default=64,
         help="Batch size used inside train_with_fpl().",
     )
     # === FPL INTEGRATION: END (CLI args) ===
 
     args = parser.parse_args()
 
-    args.search_R = True
+    args.search_R = False
     search_controllerFalg = True  # True
     if not search_controllerFalg:
         args.load_controller_relu = (
@@ -343,26 +355,29 @@ if __name__ == "__main__":
     bound_level_y = bound_level
     print("bound level is: ", bound_level)
     if args.bound_level_last >= 1:
-        bound_level_last = args.bound_level_last  # bound_level-1
+        bound_level_last = args.bound_level_last
+        suffix = "_fpl" if args.use_fpl else ""
         args.load_controller_relu = (
             dir_path
-            + "/data/monotonic_bound"
-            + str(bound_level_last)
-            + "_controller.pt"
+            + f"/data/monotonic_bound{bound_level_last}{suffix}/monotonic_bound{bound_level_last}{suffix}_controller.pt"
         )
         args.load_lyapunov_relu = (
-            dir_path + "/data/monotonic_bound" + str(bound_level_last) + "_lyapunov.pt"
+            dir_path
+            + f"/data/monotonic_bound{bound_level_last}{suffix}/monotonic_bound{bound_level_last}{suffix}_lyapunov.pt"
         )
         args.load_lyapunov_R = (
-            dir_path + "/data/monotonic_bound" + str(bound_level_last) + "_R.pt"
+            dir_path
+            + f"/data/monotonic_bound{bound_level_last}{suffix}/monotonic_bound{bound_level_last}{suffix}_R.pt"
         )
         print("pre-trained bound level is: ", bound_level_last)
-    else:
-        args.load_controller_relu = dir_path + "/data/preprocess/lqr_controller.pt"
-        # args.load_lyapunov_relu=dir_path+"/data/preprocess/lqr_lyapunov.pt"
-        # args.load_lyapunov_R=dir_path+"/data/preprocess/lqr_R.pt"
-        print("load from LQR ")
     print("pretrained lyapunov path: ", args.load_lyapunov_relu)
+
+    # else:
+    #     args.load_controller_relu = dir_path + "/data/preprocess/lqr_controller.pt"
+    #     # args.load_lyapunov_relu=dir_path+"/data/preprocess/lqr_lyapunov.pt"
+    #     # args.load_lyapunov_R=dir_path+"/data/preprocess/lqr_R.pt"
+    #     print("load from LQR ")
+
     x_lo = (
         torch.tensor(
             [
@@ -432,7 +447,7 @@ if __name__ == "__main__":
         control_samples = controller_cost_data["control_samples"]
         cost_samples = controller_cost_data["cost_samples"]
 
-    V_lambda = 0.5
+    V_lambda = 0.6
     controller_relu = utils.setup_relu(
         (4, 5, 5, 1), params=None, negative_slope=0.1, bias=True, dtype=torch.float64
     )
@@ -505,7 +520,7 @@ if __name__ == "__main__":
         size_out=1,
         size_in=forward_system.x_equilibrium.numel(),
         epsilon=0.05,
-        size_partition=9,
+        size_partition=7,
         size_piecewise=4,
         params=None,
         dtype=torch.float64,
@@ -580,26 +595,24 @@ if __name__ == "__main__":
 
         # Reuse your dense grid if already defined; otherwise create a sensible default grid
         state_dim = forward_system.x_equilibrium.numel()
-        if "state_samples_all" not in locals():
-            grid_sizes = (26,) * state_dim  # adjust if needed
-            state_samples_all = utils.get_meshgrid_samples(
-                x_lo, x_up, grid_sizes, dtype=torch.float64
-            )
+        grid_sizes = (11,) * state_dim  # adjust if needed
+        state_samples_all_fpl = utils.get_meshgrid_samples(
+            x_lo, x_up, grid_sizes, dtype=torch.float64
+        )
 
         # Hand control to the FPL loop (uses args.learning_rate & args.batch_size)
-        train_with_fpl(fpl_trainer, state_samples_all, args)
+        train_with_fpl(fpl_trainer, state_samples_all_fpl, args, randomize=True, x_lo=x_lo, x_up=x_up, num_random_samples=args.batch_size * 64)
+
+        dut
 
     elif args.train_on_samples:
         dut.train_lyapunov_on_samples(
             state_samples_all, num_epochs=args.pretrain_num_epochs, batch_size=50
         )
     dut.enable_wandb = args.enable_wandb
-    dut.save_network_path = dir_path + "/data/monotonic_bound" + str(bound_level) + "_"
 
-    # === FPL INTEGRATION: START (save path tweak) ===
-    if args.use_fpl:
-        dut.save_network_path = f"{dut.save_network_path}_fpl"
-    # === FPL INTEGRATION: END (save path tweak) ===
+    suffix = "_fpl" if args.use_fpl else ""
+    dut.save_network_path = dir_path + f"/data/monotonic_bound{bound_level}{suffix}"
 
     if args.train_adversarial:
         dut.save_network_path += "adversarial_"
@@ -620,7 +633,7 @@ if __name__ == "__main__":
             positivity_state_samples_init, derivative_state_samples_init, options
         )
     else:
-        dut.learning_rate = 0.003
+        # dut.learning_rate = 0.003
         dut.lyapunov_positivity_mip_cost_weight = 0.0  # None
         # dut.boundary_value_gap_mip_cost_weight = 0.0
         # dut.lyapunov_upper = 1.#1.#None

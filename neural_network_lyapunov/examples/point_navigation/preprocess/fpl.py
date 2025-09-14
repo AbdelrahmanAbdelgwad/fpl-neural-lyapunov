@@ -307,7 +307,7 @@ class FPLMonotonicLyapunovTrainer:
         # V_final_norm = V_final / (self.V_scale if hasattr(self, "V_scale") else 1.0)
 
         # Use normalized values for exponential decay check
-        K = 0.2
+        K = 0.2  # Decay rate
         eps = 1e-4  # Increased from 1e-8
         # mask = V_initial_norm > eps
         mask = V_initial > eps  # Use original values for masking
@@ -326,22 +326,17 @@ class FPLMonotonicLyapunovTrainer:
 
         # Smooth, stronger penalty (squared); use .mean() for batch aggregation
         lyap_decay_loss = (
-            (violation**2).mean()
+            p_mean((violation**2), 4.0)
             if violation.numel() > 0
             else V_initial.new_tensor(0.0)
         )
         lyap_decay_loss = lyap_decay_loss
 
         # saturate the penalty to be betwenen 0 and 1 without clipping gradients
-        lyap_decay_loss = torch.tanh(lyap_decay_loss)
+        lyap_decay_loss = torch.tanh(0.02 * lyap_decay_loss)
         decrease_satisfaction = 1.0 - lyap_decay_loss
 
-        # (Optional) metric: fraction of states satisfying the constraint
-        frac_satisfied = (
-            (V_f <= target_final).float().mean()
-            if V_i.numel() > 0
-            else V_initial.new_tensor(1.0)
-        )
+        v_dot_fulfillment = torch.sigmoid(V_decrease * 10)
 
         # 2) Lyapunov Positivity Constraint
         # V should be positive away from equilibrium
@@ -358,7 +353,12 @@ class FPLMonotonicLyapunovTrainer:
         zero_constraint = 1.0 - torch.sqrt(V_at_eq + 1e-9)
 
         # 4) Progress toward eq
-        progress = torch.exp(-final_distances)
+        # progress = torch.exp(-final_distances)
+        # Use the fact that the domain is bounded to a max distance from the equilibrium
+        max_distance = torch.norm(torch.max(torch.abs(self.x_lo), torch.abs(self.x_up)) - self.x_equilibrium)
+        progress = 1.0 - (final_distances / (max_distance + 1e-9))
+        progress = torch.clamp(progress, 0.0, 1.0)
+
 
         # 5) NEW: control-effort fulfillment in [0,1]
         effort_fulfillment = self._effort_fulfillment(u_values)  # [batch]
@@ -366,19 +366,20 @@ class FPLMonotonicLyapunovTrainer:
 
         # Build FPL tree
         fpl_structure = FPLConstraint(
-            p_value=-0.0,
+            p_value=-6.0,
             constraints={
                 "stability": FPLConstraint(
                     p_value=-2.0,
                     constraints={
                         "decrease": p_mean(decrease_satisfaction, -10.0),
-                        "v_dot": p_mean(torch.sigmoid(V_decrease * 10), -4.0),
+                        "v_dot": p_mean(v_dot_fulfillment, -10.0),
                     },
                 ),
                 # "performance": FPLConstraint(
                 #     p_value=-2.0,
                 #     constraints={
-                #         "effort": p_mean(effort_fulfillment, -2.0),
+                #         # "effort": p_mean(effort_fulfillment, -2.0),
+                #         "performance": p_mean(progress, -2.0),
                 #     },
                 # ),
                 # "in_bounds": p_mean(F_bounds, -2.0),
@@ -418,7 +419,8 @@ def train_with_fpl(trainer, state_samples, args):
 
             # Compute FPL loss with trajectory rollout
             loss, fpl_structure = trainer.compute_fpl_loss(
-                batch_states, min_horizon=min(epoch // 3 + 3, 30),  # max_horizon=min(max(3, int(epoch / 3)), 30),
+                batch_states,
+                min_horizon=min(epoch // 3 + 3, 30),
                 max_horizon=30,
             )
 
@@ -446,7 +448,7 @@ def train_with_fpl(trainer, state_samples, args):
         print(f"Epoch {epoch} Average Fulfillment: {1 - avg_loss:.4f}")
 
         # Early stopping if converged
-        if (1 - avg_loss) >= 0.98:
+        if (1 - avg_loss) >= 0.99:
             print("Converged!")
             break
 

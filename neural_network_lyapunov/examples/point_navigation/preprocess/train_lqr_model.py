@@ -34,7 +34,7 @@ def generate_dynamics_data(dt):
     v_range = [-10.0, +10.0]
     omega_range = [-10.0, +10.0]
 
-    num_samples = 4000
+    num_samples = 3000
 
     x_samples = utils.uniform_sample_in_box(
         torch.tensor([x_range[0], y_range[0], theta_range[0]], dtype=dtype),
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     parser.add_argument("--train_forward_model", action="store_true")
     parser.add_argument(
         "--load_forward_model", default=None, help="path to load forward model"
-    )
+    ) 
     parser.add_argument("--train_lqr_approximator", action="store_true")
     args = parser.parse_args()
 

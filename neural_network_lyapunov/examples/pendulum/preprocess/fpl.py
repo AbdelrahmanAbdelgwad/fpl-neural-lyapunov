@@ -483,7 +483,6 @@ def train_with_fpl(trainer, state_samples, args):
             # Compute FPL loss with trajectory rollout
             loss, fpl_structure = trainer.compute_fpl_loss(
                 batch_states,
-                # min_horizon=3,
                 min_horizon=min(epoch // 3 + 3, 30),
                 # max_horizon=min(max(int(epoch / 3), 10), 30),
                 max_horizon=30,

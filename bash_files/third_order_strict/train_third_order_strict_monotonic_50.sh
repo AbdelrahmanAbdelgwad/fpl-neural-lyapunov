@@ -20,7 +20,7 @@ source ./config/setup_environments.sh
 SECONDS=0
 
 python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
-    --bound_level=10 
+    --bound_level=50 
 
 # Stop timer and report
 duration=$SECONDS

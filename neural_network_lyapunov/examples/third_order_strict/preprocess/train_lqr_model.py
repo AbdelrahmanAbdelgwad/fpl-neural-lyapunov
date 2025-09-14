@@ -209,8 +209,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--load_dynamics_data",
         type=str,
-        default=dir_path
-        + "/../data/preprocess/dataset.pt",  # dir_path+'/data/dynamics_data.pt',
+        default="neural_network_lyapunov/examples/third_order_strict/data/preprocess/data.pt",  # dir_path+'/data/dynamics_data.pt',
         help="path to the dynamics data.",
     )
     parser.add_argument("--train_forward_model", action="store_true")
@@ -227,14 +226,15 @@ if __name__ == "__main__":
     bound_level_theta = bound_level
     args.train_forward_model = True
     # generate data and train for forward model
-    if args.generate_dynamics_data:
+    if args.load_dynamics_data:
+        dynamics_dataset = torch.load(args.load_dynamics_data)
+
+    elif args.generate_dynamics_data:
         print("generate dynamics dataset")
         dynamics_dataset = generate_dynamics_data(dt)
         torch.save(dynamics_dataset, args.generate_dynamics_data)
 
-    if args.load_dynamics_data:
-        dynamics_dataset = torch.load(args.load_dynamics_data)
-
+    
     thetadot_as_input = True
     if args.train_forward_model:
         print("train forward model")
@@ -246,11 +246,12 @@ if __name__ == "__main__":
             dtype=torch.float64,
         )
         save_forward_dir = (
-            dir_path + "/../data/preprocess/third_order_forward_model2.pt"
+            # dir_path + "/../data/preprocess/third_order_forward_model2.pt"
+        "neural_network_lyapunov/examples/third_order_strict/data/preprocess/third_order_forward_model2.pt"
         )
-        dynamics_relu = torch.load(
-            dir_path + "/../data/preprocess/third_order_forward_model.pt"
-        )
+        # dynamics_relu = torch.load(
+        #     dir_path + "/../data/preprocess/third_order_forward_model.pt"
+        # )
         train_forward_model(
             dynamics_relu, dynamics_dataset, num_epochs=100, save_dir=save_forward_dir
         )

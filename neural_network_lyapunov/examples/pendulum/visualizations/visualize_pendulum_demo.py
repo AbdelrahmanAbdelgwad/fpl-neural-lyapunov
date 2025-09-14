@@ -24,6 +24,7 @@ x_des = np.array([np.pi, 0])
 # load_prefix = "/modified/data/modified_fixController_bound" +str(bound_level)
 load_lossSeq_prefix = "data/tedrake/tedrake_bound"
 load_prefix = load_lossSeq_prefix + str(bound_level)
+# load_prefix = "data/monotonic_bound10_fpl/monotonic_bound10_fpl"
 # dir_path = os.path.dirname(os.path.realpath(__file__))#+"/.."
 dir_path = "/home/abdelrahman/projects/Neural_Lyapunov_Control/neural-network-lyap-control-roa/neural_network_lyapunov/examples/pendulum/"  # os.path.dirname(os.path.realpath(__file__))#+"/.."
 

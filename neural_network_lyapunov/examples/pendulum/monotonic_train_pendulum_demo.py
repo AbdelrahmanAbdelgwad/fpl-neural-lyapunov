@@ -8,12 +8,12 @@ import neural_network_lyapunov.r_options as r_options
 # import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov as lyapunov
 # import neural_network_lyapunov.monotonic_lyapunov.custom_train_lyapunov_barrier as train_lyapunov_barrier
 # import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils as monotonic_utils
+
 import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
-
 import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
-
-# import neural_network_lyapunov.monotonic_lyapunov_init.train_lyapunov_barrier_avg as train_lyapunov_barrier
 import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
+# import neural_network_lyapunov.monotonic_lyapunov_init.train_lyapunov_barrier_avg as train_lyapunov_barrier
+
 
 import torch
 import scipy.integrate
@@ -416,9 +416,9 @@ if __name__ == "__main__":
         train_forward_model(dynamics_model, model_dataset)
     else:
         dynamics_model_data = torch.load(
-            # dir_path + "/data/pendulum_second_order_forward_relu2.pt"
-            dir_path
-            + "/data/pendulum_second_order_forward_relu.pt"
+            dir_path + "/data/pendulum_second_order_forward_relu2.pt"
+            # dir_path
+            # + "/data/pendulum_second_order_forward_relu.pt"
         )
         dynamics_model = utils.setup_relu(
             dynamics_model_data["linear_layer_width"],

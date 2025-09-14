@@ -21,9 +21,11 @@ SECONDS=0
 
 # for i in {1..10}; do
     python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
-        --search_R \
         --use_fpl \
         --bound_level=10 \
+        --search_R \
+
+
         # --bound_level_last=$(($i-1)) \
         # --bound_level=10 \
         # --pretrain_num_epochs=80 \

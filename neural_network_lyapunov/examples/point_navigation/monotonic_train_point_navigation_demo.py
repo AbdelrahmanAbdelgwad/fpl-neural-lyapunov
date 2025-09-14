@@ -284,6 +284,12 @@ if __name__ == "__main__":
         help="path of the controller relu state_dict()",
     )
     parser.add_argument(
+        "--load_lyapunov_R",
+        type=str,
+        default=None,  # dir_path+"/data/pendulum_controller4.pt",#None,
+        help="path of the controller relu state_dict()",
+    )
+    parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
         default=200,
@@ -345,27 +351,19 @@ if __name__ == "__main__":
     bound_level_y = bound_level
     print("bound level is: ", bound_level)
     if args.bound_level_last >= 1:
-        bound_level_last = args.bound_level_last  # bound_level-1
+        bound_level_last = args.bound_level_last
+        suffix = "_fpl" if args.use_fpl else ""
         args.load_controller_relu = (
             dir_path
-            + "/data/monotonic/monotonic_bound"
-            # + "/data/monotonic_roa/monotonic_bound"
-            + str(bound_level_last)
-            + f"/monotonic_bound{bound_level_last}_controller.pt"
+            + f"/data/monotonic_bound{bound_level_last}{suffix}/monotonic_bound{bound_level_last}{suffix}_controller.pt"
         )
         args.load_lyapunov_relu = (
             dir_path
-            + "/data/monotonic/monotonic_bound"
-            # + "/data/monotonic_roa/monotonic_bound"
-            + str(bound_level_last)
-            + f"/monotonic_bound{bound_level_last}_lyapunov.pt"
+            + f"/data/monotonic_bound{bound_level_last}{suffix}/monotonic_bound{bound_level_last}{suffix}_lyapunov.pt"
         )
         args.load_lyapunov_R = (
             dir_path
-            + "/data/monotonic/monotonic_bound"
-            # + "/data/monotonic_roa/monotonic_bound"
-            + str(bound_level_last)
-            + f"/monotonic_bound{bound_level_last}_R.pt"
+            + f"/data/monotonic_bound{bound_level_last}{suffix}/monotonic_bound{bound_level_last}{suffix}_R.pt"
         )
         print("pre-trained bound level is: ", bound_level_last)
     print("pretrained lyapunov path: ", args.load_lyapunov_relu)
@@ -671,7 +669,7 @@ if __name__ == "__main__":
     dut.save_network_path = (
         # dir_path + "/data/monotonic_roa/monotonic_bound" + str(bound_level) + "_"
         dir_path
-        + "/data/monotonic/monotonic_bound"
+        + "/data/monotonic_bound"
         + str(bound_level)
         # + "_"
     )
@@ -679,7 +677,7 @@ if __name__ == "__main__":
         dut.save_network_path = (
             # dir_path + "/data/monotonic_roa/monotonic_bound" + str(bound_level) + "_"
             dir_path
-            + "/data/monotonic/monotonic_bound"
+            + "/data/monotonic_bound"
             + str(bound_level)
             + "_fpl"
         )
@@ -706,7 +704,7 @@ if __name__ == "__main__":
         # dut.learning_rate = 0.001
         # dut.learning_rate = 0.01
         dut.lyapunov_positivity_mip_cost_weight = None
-        # dut.boundary_value_gap_mip_cost_weight = 0.0
+        dut.boundary_value_gap_mip_cost_weight = 0.0
         # dut.lyapunov_upper = 1.#1.#None
         dut.train(torch.empty((0, 3), dtype=torch.float64))
     pass

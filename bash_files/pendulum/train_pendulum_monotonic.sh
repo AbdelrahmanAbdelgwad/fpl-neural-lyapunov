@@ -25,15 +25,17 @@ SECONDS=0
 for i in {1..10}; do
     if [ "$i" -eq 1 ]; then
         python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
-            # --search_R \
             --bound_level=$i \
             --bound_level_last=$(($i-1)) \
+            --search_R \
+
             # --max_iterations=1000
     else
         python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
-        # --search_R \
             --bound_level=$i \
             --bound_level_last=$(($i-1)) \
+            --search_R \
+
             # --max_iterations=1000
     fi
 done
