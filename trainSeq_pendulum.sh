@@ -12,7 +12,9 @@ source /share/pkg.7/miniconda/4.9.2/install/etc/profile.d/conda.sh
 conda activate py3lyap
 python setup.py
 source ./config/setup_environments.sh
-cd ~/Desktop/Research/Lyapunov/neural-network-lyapunov
+# cd ~/Desktop/Research/Lyapunov/neural-network-lyapunov
+cd /home/abdelrahman/projects/Neural_Lyapunov_Control/neural-network-lyap-control-roa
+
 python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py --bound_level=2
 for i in {4,6,8,10}; 
 do 

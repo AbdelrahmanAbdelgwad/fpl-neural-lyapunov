@@ -615,7 +615,7 @@ class GurobiTorchMIP:
         constr = self.gurobi_model.addMConstr(A_flat.detach().numpy(),
                                               x_flat,
                                               sense=sense,
-                                              b=b,
+                                              b=b.detach().numpy(),
                                               name=name)
         continuous_var_flag = \
             [xi in self.r_indices.keys() for xi in x_flat]
