@@ -161,7 +161,13 @@ class LinearyLayer(nn.Module):
                         self.device
                     )
                 ).reshape(-1)
-            self.b.retain_grad()
+            try:
+                self.b.retain_grad()
+            except:
+                # RuntimeError: can't retain_grad on Tensor that has requires_grad=False
+                # change to requires_grad=True then
+                self.b = self.b.requires_grad_()
+                self.b.retain_grad()
 
         else:
             # self.a_input.data = torch.clamp(self.a_input.data,0.)
@@ -176,10 +182,20 @@ class LinearyLayer(nn.Module):
                 torch.zeros((1,), dtype=self.dtype).to(self.device).requires_grad_()
             )
             self.weight = self.a.reshape(-1)[..., None].t()
-            self.a.retain_grad()
-
-        self.bias.retain_grad()
-        self.weight.retain_grad()
+            try:
+                self.a.retain_grad()
+            except:
+                self.a = self.a.requires_grad_()
+                self.a.retain_grad()
+            
+        try:
+            self.bias.retain_grad()
+            self.weight.retain_grad()
+        except:
+            self.bias = self.bias.requires_grad_()
+            self.weight = self.weight.requires_grad_()
+            self.bias.retain_grad()
+            self.weight.retain_grad()
 
     def forward(self, x):
         self.reset_parameters()

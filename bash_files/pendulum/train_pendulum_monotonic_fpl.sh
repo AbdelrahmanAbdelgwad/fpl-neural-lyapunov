@@ -24,6 +24,10 @@ SECONDS=0
         --use_fpl \
         --bound_level=10 \
         --search_R \
+        
+        # --load_lyapunov_relu="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_lyapunov.pt" \
+        # --load_controller_relu="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_controller.pt" \
+        # --load_lyapunov_R="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_R.pt" \
 
 
         # --bound_level_last=$(($i-1)) \

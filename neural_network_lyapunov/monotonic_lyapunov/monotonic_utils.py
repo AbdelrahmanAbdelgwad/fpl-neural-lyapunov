@@ -115,6 +115,21 @@ class LinearyLayer(nn.Module):
         else:
             torch.nn.init.uniform_(self.a_input,a=0.0,b=1.0)
     def reset_parameters(self) -> None:
+        # ##### Add these lines at the beginning to ensure everything is on the same device #####
+        if hasattr(self, 'x_eqlm') and self.x_eqlm is not None:
+            device = self.x_eqlm.device
+        else:
+            device = torch.device('cpu')  # default to CPU
+        
+        # Move v to the same device as x_eqlm
+        if hasattr(self, 'v') and self.v is not None:
+            self.v = self.v.to(device)
+        
+        # Update self.device to match
+        self.device = device
+        ########################################################################################
+        
+
         if self.case == 1:
             # self.b_input.data = torch.clamp(self.b_input.data,1e-1)
             
@@ -125,8 +140,11 @@ class LinearyLayer(nn.Module):
             if self.x_eqlm is None:
                 self.bias = -self.b.reshape(-1)
             else:
+                
                 self.bias = -(self.b + \
                     (self.v@self.x_eqlm[...,None])@torch.ones(1,self.size_piecewise,dtype=self.dtype).to(self.device)).reshape(-1)
+            # requires_grad=True
+            self.b.requires_grad=True
             self.b.retain_grad()
             
         else:
@@ -137,9 +155,14 @@ class LinearyLayer(nn.Module):
                 self.F_2.tile(self.a_input.shape[0],1)+ \
                 self.F_3.tile(self.a_input.shape[0],1)
             self.bias = torch.zeros((1,), dtype=self.dtype).to(self.device).requires_grad_() 
-            self.weight = self.a.reshape(-1)[...,None].t() 
+            self.weight = self.a.reshape(-1)[...,None].t()
+            # requires_grad=True
+            self.a.requires_grad=True
             self.a.retain_grad()
-            
+        
+        # requires_grad=True
+        self.bias.requires_grad=True
+        self.weight.requires_grad=True
         self.bias.retain_grad()
         self.weight.retain_grad()
             

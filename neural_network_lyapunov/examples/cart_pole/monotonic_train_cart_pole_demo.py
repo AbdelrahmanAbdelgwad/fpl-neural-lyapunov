@@ -10,13 +10,15 @@ import neural_network_lyapunov.r_options as r_options
 # import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_train_lyapunov_barrier as train_lyapunov_barrier
 # import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils as monotonic_utils
 
-# import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
-# import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
-# import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
-
 import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
 import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
-import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
+# import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
+import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils_v2 as monotonic_utils
+
+
+# import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
+# import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
+# import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
 
 import torch
 import scipy.integrate
@@ -29,6 +31,8 @@ import os
 from neural_network_lyapunov.examples.cart_pole.preprocess.fpl import (
     FPLMonotonicLyapunovTrainer,
     train_with_fpl,
+    train_with_fpl_milp,
+    adaptive_fpl_milp_training,
 )
 
 # === FPL INTEGRATION: END (imports) ===
@@ -329,13 +333,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=5e-3,
+        default=1e-3,
         help="Learning rate used inside train_with_fpl().",
     )
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=64,
+        default=32,
         help="Batch size used inside train_with_fpl().",
     )
     # === FPL INTEGRATION: END (CLI args) ===
@@ -436,6 +440,7 @@ if __name__ == "__main__":
         #     dtype=torch.float64)
         # dynamics_relu.load_state_dict(dynamics_model_data["state_dict"])
         dynamics_relu = torch.load(dynamics_model_path, map_location=device)
+        dynamics_relu = dynamics_relu.to(device)
 
     if args.generate_controller_cost_data:
         state_samples, control_samples, cost_samples = generate_controller_dataset()
@@ -465,6 +470,7 @@ if __name__ == "__main__":
         #     dtype=torch.float64)
         # controller_relu.load_state_dict(controller_data["state_dict"])
         controller_relu = torch.load(args.load_controller_relu, map_location=device)
+        controller_relu = controller_relu.to(device)
 
     plant = cart_pole.Cart_Pole(torch.float64)
     # lqr_gain = plant.lqr_control(np.diag([1., 10.]), np.array([[1.]]))
@@ -526,6 +532,7 @@ if __name__ == "__main__":
         dtype=torch.float64,
         x_eqlm=forward_system.x_equilibrium,
         provided_v=S_eig_vec,
+        # device=device,
     )
     if args.train_cost_approximator:
         train_cost_approximator(state_samples, cost_samples, lyapunov_relu, V_lambda)
@@ -541,7 +548,9 @@ if __name__ == "__main__":
         # V_lambda = lyapunov_data["V_lambda"]
         # R = lyapunov_data["R"]
         R = torch.load(args.load_lyapunov_R, map_location=device)
+        R = R.to(device)
         lyapunov_relu = torch.load(args.load_lyapunov_relu, map_location=device)
+        lyapunov_relu = lyapunov_relu.to(device)
     lyapunov_hybrid_system = lyapunov.LyapunovDiscreteTimeHybridSystem(
         closed_loop_system, lyapunov_relu
     )
@@ -582,7 +591,7 @@ if __name__ == "__main__":
 
     # === FPL INTEGRATION: START (trainer) ===
     if args.use_fpl:
-        # Build the FPL trainer around your existing hybrid Lyapunov system
+        # Build the FPL trainer
         fpl_trainer = FPLMonotonicLyapunovTrainer(
             lyapunov_hybrid_system,
             closed_loop_system,
@@ -593,17 +602,14 @@ if __name__ == "__main__":
             x_up=x_up,
         )
 
-        # Reuse your dense grid if already defined; otherwise create a sensible default grid
-        state_dim = forward_system.x_equilibrium.numel()
-        grid_sizes = (11,) * state_dim  # adjust if needed
         state_samples_all_fpl = utils.get_meshgrid_samples(
-            x_lo, x_up, grid_sizes, dtype=torch.float64
+            x_lo, x_up, (5, 5, 5, 5), dtype=torch.float64
         )
-
-        # Hand control to the FPL loop (uses args.learning_rate & args.batch_size)
-        train_with_fpl(fpl_trainer, state_samples_all_fpl, args, randomize=True, x_lo=x_lo, x_up=x_up, num_random_samples=args.batch_size * 64)
-
-        dut
+        # Use MILP-based FPL training
+        fpl_trainer = train_with_fpl(fpl_trainer, state_samples_all_fpl, args, randomize=True, x_lo=x_lo, x_up=x_up)
+        # fpl_trainer = train_with_fpl_milp(fpl_trainer, dut, args, x_lo, x_up)
+        # fpl_trainer = adaptive_fpl_milp_training(fpl_trainer, dut, args, x_lo, x_up)
+    
 
     elif args.train_on_samples:
         dut.train_lyapunov_on_samples(
@@ -633,9 +639,11 @@ if __name__ == "__main__":
             positivity_state_samples_init, derivative_state_samples_init, options
         )
     else:
-        # dut.learning_rate = 0.003
+        dut.learning_rate = 3e-3  # args.learning_rate
+        print("Learning rate is: ", dut.learning_rate)
         dut.lyapunov_positivity_mip_cost_weight = 0.0  # None
         # dut.boundary_value_gap_mip_cost_weight = 0.0
         # dut.lyapunov_upper = 1.#1.#None
+        dut.patience = 1e6
         dut.train(torch.empty((0, 4), dtype=torch.float64))
     pass

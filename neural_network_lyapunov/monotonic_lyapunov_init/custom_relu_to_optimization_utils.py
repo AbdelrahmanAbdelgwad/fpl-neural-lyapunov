@@ -116,7 +116,8 @@ def _add_constraint_by_layer(
     @param linear_output_lo The lower bound of the linear layer output.
     @param linear_output_up The upper bound of the linear layer output.
     """
-    assert isinstance(linear_layer, monotonic_utils.LinearyLayer)
+    # assert isinstance(linear_layer, monotonic_utils.LinearyLayer)
+    assert type(linear_layer).__name__ == 'LinearyLayer'
     assert isinstance(linear_output_lo, torch.Tensor)
     assert isinstance(linear_output_up, torch.Tensor)
     dtype = linear_layer.weight.data.dtype

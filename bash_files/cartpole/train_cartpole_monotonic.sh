@@ -27,14 +27,16 @@ for i in {1..40}; do
         python neural_network_lyapunov/examples/cart_pole/monotonic_train_cart_pole_demo.py \
             --bound_level=$i \
             --bound_level_last=$(($i-1)) \
-            --search_R \
+            --load_lyapunov_relu neural_network_lyapunov/examples/cart_pole/data/preprocess/lqr_lyapunov_monotonic.pt \
+            --load_controller_relu neural_network_lyapunov/examples/cart_pole/data/preprocess/lqr_controller.pt \
+            --load_lyapunov_R neural_network_lyapunov/examples/cart_pole/data/preprocess/lqr_R_monotonic.pt \
+
 
     else
     
         python neural_network_lyapunov/examples/cart_pole/monotonic_train_cart_pole_demo.py \
             --bound_level=$i \
             --bound_level_last=$(($i-1)) \
-            --search_R \
 
     fi
 done

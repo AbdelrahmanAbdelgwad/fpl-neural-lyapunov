@@ -375,7 +375,6 @@ class FPLMonotonicLyapunovTrainer:
             if violation.numel() > 0
             else V_initial.new_tensor(0.0)
         )
-        lyap_decay_loss = lyap_decay_loss
 
         # saturate the penalty to be betwenen 0 and 1 without clipping gradients
         lyap_decay_loss = torch.tanh(0.005 * lyap_decay_loss)

@@ -31,6 +31,32 @@ from neural_network_lyapunov.examples.pendulum.preprocess.fpl import (
 
 import random
 
+import torch
+
+def project_to_psd(A, regularization=1e-12):
+    """
+    Project matrix A to its nearest positive semi-definite version.
+    
+    Args:
+        A: Input tensor (will be symmetrized if not symmetric)
+        regularization: Small value to add to zero eigenvalues for numerical stability
+    
+    Returns:
+        PSD projection of A
+    """
+    # Ensure symmetry
+    A_sym = (A + A.T) / 2
+    
+    # Eigendecomposition
+    eigenvals, eigenvecs = torch.linalg.eigh(A_sym)
+    
+    # Clip negative eigenvalues to regularization value
+    eigenvals_clipped = torch.clamp(eigenvals, min=regularization)
+    
+    # Reconstruct matrix
+    A_psd = eigenvecs @ torch.diag(eigenvals_clipped) @ eigenvecs.T
+    
+    return A_psd
 
 def set_all_seeds(seed: int = 0):
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -481,6 +507,7 @@ if __name__ == "__main__":
 
     if args.load_lyapunov_R is not None:
         R = torch.load(args.load_lyapunov_R)
+        R = project_to_psd(R)
         print("Loaded R is: ", R)
     else:
         R = torch.cat((rotation_matrix(np.pi / 4), rotation_matrix(np.pi / 10)), dim=0)
@@ -533,6 +560,7 @@ if __name__ == "__main__":
 
     if args.search_R:
         R_options = r_options.SearchRwithSPDOptions(R.shape, epsilon=0.01)
+        # ensure R is always SPD and if not, project it back to the nearest SPD matrix
         R_options.set_variable_value(R.detach().numpy())
     else:
         R_options = r_options.FixedROptions(R)
@@ -622,5 +650,8 @@ if __name__ == "__main__":
         # dut.learning_rate = 1e-1
         dut.optimizer_scheduling = True
         # print("Learning Rate is: ", dut.learning_rate)
+        dut.patience = 1e6
+        dut.no_improve_count = 0
+        dut.best_violation = float('inf')
         dut.train(torch.empty((0, 2), dtype=torch.float64))
     pass

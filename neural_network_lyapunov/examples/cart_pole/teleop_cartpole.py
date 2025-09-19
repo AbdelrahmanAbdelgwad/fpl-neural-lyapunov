@@ -277,7 +277,7 @@ def main():
     # Init + bounds
     ap.add_argument("--x-init", type=float, nargs=4, default=[0.0, 0.1, 0.0, 0.0])
     ap.add_argument("--paper-bounds", action="store_true", help="Use paper-style box via bound_level/100")
-    ap.add_argument("--bound-level", type=int, default=50, help="For paper-bounds: scales the box (divided by 100)")
+    ap.add_argument("--bound-level", type=int, default=100, help="For paper-bounds: scales the box (divided by 100)")
     ap.add_argument("--compare", action="store_true")
     ap.add_argument("--clamp-bounds", action="store_true")
 
@@ -371,18 +371,36 @@ def main():
                 u = +args.umax
             if keys[pygame.K_x] or keys[pygame.K_z]:
                 u = 0.0
+            u = float(np.clip(u, -args.umax, args.umax))
+            # In keyboard mode, both systems use same input
+            u_truth = u
+            u_model = u
         else:
-            u = controller(x_model)
-        u = float(np.clip(u, -args.umax, args.umax))
+            # Non-keyboard controllers
+            if compare:
+                # Each system gets its own control based on its own state
+                u_truth = controller(x_truth)
+                u_model = controller(x_model)
+            else:
+                # Single system mode
+                if model.model is not None:
+                    u = controller(x_model)
+                else:
+                    u = controller(x_truth)
+                u_truth = u
+                u_model = u
+            
+            u_truth = float(np.clip(u_truth, -args.umax, args.umax))
+            u_model = float(np.clip(u_model, -args.umax, args.umax))
 
         if not paused:
             # Integrate truth via plant
-            x_truth_next = plant.next_pose(x_truth, np.array([u]), args.dt)
+            x_truth_next = plant.next_pose(x_truth, np.array([u_truth]), args.dt)
             x_truth = clamp_state(x_truth_next, x_lo, x_hi) if args.clamp_bounds else x_truth_next
 
             # Integrate model
             if model.model is not None:
-                x_model_next = model.step(x_model, u)
+                x_model_next = model.step(x_model, u_model)
                 x_model = clamp_state(x_model_next, x_lo, x_hi) if args.clamp_bounds else x_model_next
             else:
                 x_model = x_truth.copy()
@@ -417,15 +435,36 @@ def main():
             state = x_model if model.model is not None else x_truth
             rnd.draw_cartpole(screen, state, rnd.single_cart, rnd.single_pole)
 
-        # Force arrow
-        if abs(u) > 1e-2:
-            ref = x_truth if compare else (x_model if model.model is not None else x_truth)
-            cx, cy = rnd.world_to_screen(ref[0], 0.0)
-            L = int(abs(u) * 3)
-            sgn = 1 if u > 0 else -1
-            end = (cx + sgn * L, cy)
-            pygame.draw.line(screen, (0, 180, 0), (cx, cy), end, 4)
-            pygame.draw.polygon(screen, (0, 180, 0), [end, (end[0]-sgn*8, end[1]-5), (end[0]-sgn*8, end[1]+5)])
+        # Force arrow(s)
+        if compare:
+            # Draw truth force
+            if abs(u_truth) > 1e-2:
+                cx, cy = rnd.world_to_screen(x_truth[0], -0.05)
+                L = int(abs(u_truth) * 3)
+                sgn = 1 if u_truth > 0 else -1
+                end = (cx + sgn * L, cy)
+                pygame.draw.line(screen, (50, 80, 220), (cx, cy), end, 4)
+                pygame.draw.polygon(screen, (50, 80, 220), [end, (end[0]-sgn*8, end[1]-5), (end[0]-sgn*8, end[1]+5)])
+            
+            # Draw model force
+            if abs(u_model) > 1e-2:
+                cx, cy = rnd.world_to_screen(x_model[0], 0.05)
+                L = int(abs(u_model) * 3)
+                sgn = 1 if u_model > 0 else -1
+                end = (cx + sgn * L, cy)
+                pygame.draw.line(screen, (220, 80, 80), (cx, cy), end, 4)
+                pygame.draw.polygon(screen, (220, 80, 80), [end, (end[0]-sgn*8, end[1]-5), (end[0]-sgn*8, end[1]+5)])
+        else:
+            # Single system
+            u_display = u_model if model.model is not None else u_truth
+            if abs(u_display) > 1e-2:
+                ref = x_model if model.model is not None else x_truth
+                cx, cy = rnd.world_to_screen(ref[0], 0.0)
+                L = int(abs(u_display) * 3)
+                sgn = 1 if u_display > 0 else -1
+                end = (cx + sgn * L, cy)
+                pygame.draw.line(screen, (0, 180, 0), (cx, cy), end, 4)
+                pygame.draw.polygon(screen, (0, 180, 0), [end, (end[0]-sgn*8, end[1]-5), (end[0]-sgn*8, end[1]+5)])
 
         # HUD
         lines = []
@@ -438,7 +477,12 @@ def main():
         lines.append(f"State (truth): x={x_truth[0]:+.3f} m, θ={math.degrees(x_truth[1]):+.1f}°, ẋ={x_truth[2]:+.3f}, θ̇={x_truth[3]:+.3f}")
         if model.model is not None:
             lines.append(f"State (model): x={x_model[0]:+.3f} m, θ={math.degrees(x_model[1]):+.1f}°, ẋ={x_model[2]:+.3f}, θ̇={x_model[3]:+.3f}")
-        lines.append(f"u={u:+.2f} N   |   Bounds: {'PAPER' if args.paper_bounds else 'WIDE'}   Clamp: {'ON' if args.clamp_bounds else 'OFF'}")
+        # In the HUD section, replace the u display line:
+        if compare:
+            lines.append(f"u_truth={u_truth:+.2f} N, u_model={u_model:+.2f} N   |   Bounds: {'PAPER' if args.paper_bounds else 'WIDE'}   Clamp: {'ON' if args.clamp_bounds else 'OFF'}")
+        else:
+            u_display = u_model if model.model is not None else u_truth
+            lines.append(f"u={u_display:+.2f} N   |   Bounds: {'PAPER' if args.paper_bounds else 'WIDE'}   Clamp: {'ON' if args.clamp_bounds else 'OFF'}")
         lines += [
             "Keys:",
             "  A/D or ←/→: ±force   Q/E: max left/right   X/Z: zero",

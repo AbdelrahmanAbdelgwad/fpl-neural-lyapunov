@@ -271,9 +271,10 @@ class ReLUFreePattern:
         layer_count = 0
         print("ReLUFreePattern: model is", model[-1])
         # assert isinstance(model[-1], monotonic_utils.LinearLayer)
-        assert isinstance(model[-1], monotonic_utils.LinearyLayer)
+        # assert isinstance(model[-1], monotonic_utils.LinearyLayer)
+        assert type(model[-1]).__name__ == 'LinearyLayer'
         for layer in self.model:
-            if isinstance(layer, monotonic_utils.LinearyLayer):
+            if type(layer).__name__ == 'LinearyLayer':
                 self.relu_unit_index.append(
                     list(
                         range(

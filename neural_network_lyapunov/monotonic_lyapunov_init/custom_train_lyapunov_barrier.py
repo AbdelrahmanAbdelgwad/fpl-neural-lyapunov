@@ -90,6 +90,11 @@ class Trainer:
         self.learning_rate = 0.003
         # Number of iterations in the training.
         self.max_iterations = 1000
+
+        self.patience = 5
+        self.no_improve_count = 0
+        self.best_violation = np.inf
+
         # We support Adam or SGD.
         self.optimizer = "Adam"
 
@@ -1125,6 +1130,7 @@ class Trainer:
         best_derivative_mip_cost = np.inf
         best_training_params = None
         loss_values = []
+
         while iter_count < self.max_iterations:
             self._save_network(iter_count)
             self._save_loss_history(
@@ -1249,6 +1255,22 @@ class Trainer:
             scheduler.step()
             if iter_count in scheduler_milestones:
                 after_lr = optimizer.param_groups[0]["lr"]
+
+            # Check for improvement
+            current_violation = total_loss_return.lyap_loss.derivative_mip_obj
+            if current_violation < self.best_violation - 1e-7:  # Small tolerance for numerical noise
+                self.best_violation = current_violation
+                self.no_improve_count = 0
+            else:
+                self.no_improve_count += 1
+
+            # If no improvement for 'patience' epochs, switch strategy
+            if self.no_improve_count >= self.patience:
+                print(f"No improvement for {self.patience} iterations. Switching to Phase FPL training.")
+                self.no_improve_count = 0  # Reset counter
+                self.best_violation = np.inf  # Reset best violation
+                break
+
 
         return (
             False,

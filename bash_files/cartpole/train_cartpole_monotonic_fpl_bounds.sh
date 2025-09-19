@@ -24,26 +24,24 @@ SECONDS=0
 for i in {1..100}; do
     if [ "$i" -eq 1 ]; then
         python neural_network_lyapunov/examples/cart_pole/monotonic_train_cart_pole_demo.py \
-            --use_fpl \
             --bound_level=$i \
+            --use_fpl \
             --pretrain_num_epochs=5000 \
             --max_iterations=1 \
-            --load_lyapunov_relu neural_network_lyapunov/examples/cart_pole/data/preprocess/lqr_lyapunov_monotonic.pt \
-            --load_controller_relu neural_network_lyapunov/examples/cart_pole/data/preprocess/lqr_controller.pt \
-            --load_lyapunov_R neural_network_lyapunov/examples/cart_pole/data/preprocess/lqr_R_monotonic.pt \
-
-
-    else
+            # --load_lyapunov_relu="${CKPT_DIR}/monotonic_bound40_fpl_lyapunov.pt" \
+            # --load_controller_relu="${CKPT_DIR}/monotonic_bound40_fpl_controller.pt" \
+            # --load_lyapunov_R="${CKPT_DIR}/monotonic_bound40_fpl_R.pt" \
     
+    else
         python neural_network_lyapunov/examples/cart_pole/monotonic_train_cart_pole_demo.py \
-            --use_fpl \
             --bound_level=$i \
             --bound_level_last=$(($i-1)) \
+            --use_fpl \
             --max_iterations=1 \
-  
+            --pretrain_num_epochs=5000 \
+
     fi
 done
-
 
 # Stop timer and report
 duration=$SECONDS

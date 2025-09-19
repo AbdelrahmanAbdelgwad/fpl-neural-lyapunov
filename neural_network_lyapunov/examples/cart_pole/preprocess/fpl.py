@@ -131,9 +131,12 @@ class FPLMonotonicLyapunovTrainer:
         self.closed_loop_system = closed_loop_system
         self.V_lambda = V_lambda
         self.x_equilibrium = x_equilibrium
+        print(f"FPL Trainer: Equilibrium at {self.x_equilibrium}")
         self.R_options = R_options
         self.x_lo = x_lo
+        print(f"FPL Trainer: State lower bounds {self.x_lo}")
         self.x_up = x_up
+        print(f"FPL Trainer: State upper bounds {self.x_up}")
 
     def rollout_trajectory(self, initial_states: torch.Tensor, horizon: int) -> tuple:
         batch_size, state_dim = initial_states.shape
@@ -149,9 +152,11 @@ class FPLMonotonicLyapunovTrainer:
         V_values = torch.zeros(
             batch_size, horizon + 1, device=device, dtype=initial_states.dtype
         )
+       # respect the true control dimension (cart-pole u_dim = 1)
+        u_dim = self.closed_loop_system.forward_system.u_dim
         u_values = torch.zeros(
-            batch_size, horizon, 2, device=device, dtype=initial_states.dtype
-        )
+        batch_size, horizon, u_dim, device=device, dtype=initial_states.dtype
+)
 
         trajectory[:, 0] = initial_states
         current_states = initial_states
@@ -167,9 +172,9 @@ class FPLMonotonicLyapunovTrainer:
             # x_{t+1} = f(x_t, u_t)   (NO .detach(); NO in-place)
             ns = self.closed_loop_system.step_forward(current_states)  # [B, 3]
             next_states = ns.clone()
-            # wrap angle to [-pi, pi] in-place on index 2
-            next_states[:, 2:3] = (
-                (next_states[:, 2:3] + torch.pi) % (2 * torch.pi)
+            # wrap cart-pole angle θ to [-π, π]; θ is state index 1
+            next_states[:, 1:2] = (
+                (next_states[:, 1:2] + torch.pi) % (2 * torch.pi)
             ) - torch.pi
             trajectory[:, t + 1] = next_states
             current_states = next_states
@@ -275,83 +280,95 @@ class FPLMonotonicLyapunovTrainer:
         )
         return V
 
-    def compute_fpl_loss(
-        self, batch_states: torch.Tensor, min_horizon: int = 3, max_horizon: int = 20
-    ) -> tuple:
+    def compute_fpl_loss(self, batch_states: torch.Tensor, min_horizon: int = 3, max_horizon: int = 20, deriv_viol: torch.Tensor = None) -> tuple:
         horizon = torch.randint(min_horizon, max_horizon + 1, (1,)).item()
-
-        trajectories, V_values, u_values = self.rollout_trajectory(
-            batch_states, horizon
-        )
-
-        F_bounds = self._in_bounds_fulfillment(trajectories)  # [B]
-
+        trajectories, V_values, u_values = self.rollout_trajectory(batch_states, horizon)
+        
         V_initial = V_values[:, 0]
         V_final = V_values[:, -1]
-
-        
-
-        # # DEBUG: Check what's happening with trajectories
-        # print(f"\n=== Debug Info ===")
-        # print(f"Horizon: {horizon}")
-        # print(f"Batch size: {batch_states.shape[0]}")
-
-        # # Check a single trajectory
-        # idx = 0  # First trajectory
-        # print(f"\nTrajectory {idx}:")
-        # print(f"  Initial state: {batch_states[idx].tolist()}")
-        # # print intermediate states
-        # for t in range(horizon + 1):
-        #     print(f"  State at t={t}: {trajectories[idx, t].tolist()}")
-        # print(f"  Control inputs: {u_values[idx].squeeze().tolist()}")
-        # print(f"  Final state: {trajectories[idx, -1].tolist()}")
-        # print(f"  Initial V: {V_initial[idx].item():.6f}")
-        # print(f"  Final V: {V_final[idx].item():.6f}")
-        # print(f"  V_decrease: {(V_initial[idx] - V_final[idx]).item():.6f}")
-
-        # # Check if states are actually moving toward equilibrium
-        # initial_dist = torch.norm(batch_states[idx] - self.x_equilibrium).item()
-        # final_dist = torch.norm(trajectories[idx, -1] - self.x_equilibrium).item()
-        # print(f"  Initial distance from eq: {initial_dist:.6f}")
-        # print(f"  Final distance from eq: {final_dist:.6f}")
-        # print(f"  Distance decrease: {(initial_dist - final_dist):.6f}")
-
-        # # Print first few V values along trajectory
-        # print(f"  V trajectory: {V_values[idx, :5].tolist()}")
-        # print("==================\n")
-
-        # distances
-        initial_distances = torch.norm(batch_states - self.x_equilibrium, p=2, dim=1)
         final_states = trajectories[:, -1]
-        final_distances = torch.norm(final_states - self.x_equilibrium, p=2, dim=1)
+        
+        # For cartpole: state is [x, theta, x_dot, theta_dot]
+        # We care about theta converging to 0 (upright position)
+        
+        # 1. Angular similarity for cartpole (theta should be near 0)
+        theta_final = final_states[:, 1]  # theta is at index 1
+        theta_equilibrium = self.x_equilibrium[1]  # should be 0
+        
+        # Map theta difference to similarity (1 when theta=0, 0 when far)
+        angular_similarities = torch.exp(-10 * (theta_final - theta_equilibrium)**2)
+        
+        # All trajectory angular similarities for p_mean
+        all_theta = trajectories[:, :, 1]  # [B, H+1]
+        as_all = torch.exp(-10 * (all_theta - theta_equilibrium)**2)  # [B, H+1]
+        as_all_mean = as_all.mean(dim=1)  # [B]
+        
+        # Build piecewise for close_angles matching TF version
+        close_angles = build_piecewise(
+            [(0.0, 0.0), (0.6, 0.01), (0.7, 0.9), (1.0, 1.0)],
+            p_mean(as_all_mean, 2.0),  # Use p=2.0 as in TF
+            clipped=False
+        )
 
-        # # 1) Lyapunov decrease
+        # 2. X position closeness (x should be near 0)
+        x_final = final_states[:, 0]  # x is at index 0
+        x_equilibrium = self.x_equilibrium[0]  # should be 0
+
+        # Map x difference to similarity (1 when x=0, 0 when far)
+        x_similarities = torch.exp(-1 * (x_final - x_equilibrium)**2)
+
+        all_x = trajectories[:, :, 0]  # [B, H+1]
+        xs_all = torch.exp(-1 * (all_x - x_equilibrium)**2)
+        xs_all_mean = xs_all.mean(dim=1)  # [B]
+
+        close_x = build_piecewise(
+            [(0.0, 0.0), (0.6, 0.01), (0.7, 0.9), (1.0, 1.0)],
+            p_mean(xs_all_mean, 2.0),  # Use p=2.0 as in TF
+            clipped=False
+        )
+        
+        # 3. Proof of Performance - matching TF's line-based approach
         V_decrease = V_initial - V_final
-        # print(f"  V decrease mean: {V_decrease.mean().item():.6f}")
-        # required_decrease = torch.minimum(
-        #     V_initial,
-        #     torch.tensor(
-        #         horizon / 50.0, dtype=V_initial.dtype, device=V_initial.device
-        #     ),
-        # )
-        # decrease_satisfaction = build_piecewise(
-        #     [
-        #         (-1.0, 0.0),
-        #         (-0.05, 0.001),
-        #         (0.0, 0.01),
-        #         (required_decrease, 0.9),
-        #         (1.0, 1.0),
-        #     ],
-        #     V_decrease,
-        #     clipped=True,
-        # )
+        decrease_by = 1.0 / 100.0  # arrive at target within 100 steps
+        repetitionsf = torch.tensor(horizon, dtype=V_initial.dtype, device=V_initial.device)
+        line = torch.minimum(
+            decrease_by * repetitionsf,
+            V_initial
+        )
+        
+        # Build piecewise needs line to be a scalar or match batch size
+        # We'll apply it element-wise
+        proof_of_performance = []
+        for i in range(V_decrease.shape[0]):
+            line_i = line[i] if line.dim() > 0 else line
+            pop_i = build_piecewise(
+                [(-1.0, 0.0), (-0.1, 0.001), (0.0, 0.01), (line_i.item(), 0.9), (1.0, 1.0)],
+                V_decrease[i:i+1],
+                clipped=True
+            )
+            proof_of_performance.append(pop_i)
+        proof_of_performance = torch.cat(proof_of_performance)
 
-        # 1) Lyapunov exponential decrease (not finite time decay with build_piecewise)
-        # V_dot <= -K * V
-        # Discrete condition: V_final - V_initial <= -K * V_initial  ⇔  V_final <= (1 - K) * V_initial
-        # # When computing decrease satisfaction, normalize V values first
-        # V_initial_norm = V_initial / (self.V_scale if hasattr(self, "V_scale") else 1.0)
-        # V_final_norm = V_final / (self.V_scale if hasattr(self, "V_scale") else 1.0)
+        # 4. Exponential Lyapunov decrease per step V[t+1] < (1 - K) * V[t]
+        K = 0.001  # 0.1% decrease per step
+        steps = 1
+        V_final_i = V_values[:, steps:]
+        V_initial_i = V_values[:, :-steps]
+        # Ensure same length by trimming
+        if V_final_i.shape[1] != V_initial_i.shape[1]:
+            min_len = min(V_final_i.shape[1], V_initial_i.shape[1])
+            V_final_i = V_final_i[:, :min_len]
+            V_initial_i = V_initial_i[:, :min_len]
+        # Compute v_dot for each step
+        v_dot = V_final_i - (1.0 - K) * V_initial_i  # [B, H]
+        v_dot_mean = v_dot.mean(dim=1)  # [B]
+
+        exp_decrease_fulfillment = build_piecewise(
+            [(-1.0, 0.0), (-0.1, 0.001), (0.0, 0.01), (1.0, 0.9), (10.0, 1.0)],
+            -v_dot_mean,  # negate to turn decrease into increase
+            clipped=True
+        )
+
 
         # Use normalized values for exponential decay check
         K = 0.2
@@ -373,134 +390,243 @@ class FPLMonotonicLyapunovTrainer:
 
         # Smooth, stronger penalty (squared); use .mean() for batch aggregation
         lyap_decay_loss = (
-            (violation**2).mean()
+            (violation**0.5).mean()
             if violation.numel() > 0
             else V_initial.new_tensor(0.0)
         )
+
         lyap_decay_loss = lyap_decay_loss
 
         # saturate the penalty to be betwenen 0 and 1 without clipping gradients
         lyap_decay_loss = torch.tanh(0.005 * lyap_decay_loss)
         decrease_satisfaction = 1.0 - lyap_decay_loss
+        v_dot_fulfillment = torch.sigmoid(V_decrease * 100)
 
-        v_dot_fulfillment = torch.sigmoid(V_decrease * 10)
-        # N = 10.0
-        # v_dot_fulfillment = 1.5 - N / (N + V_decrease)
-        # v_dot_fulfillment = v_dot_fulfillment.clamp(min=0.0, max=1.0)
+        # Scale the derivative violation to [0,1] (high when small)
+        # 1 should be the convergence threshold which is 2.5e-6 and lowest when the violation is 1 or more
 
-        # 2) Lyapunov Positivity Constraint
-        # V should be positive away from equilibrium
-        distance_threshold = 0.01
-        away_from_eq = initial_distances > distance_threshold
-        V_positive = torch.where(
-            away_from_eq,
-            torch.sigmoid(V_initial * 10),  # Sigmoid shaping for smooth gradient
-            torch.ones_like(V_initial),
-        )
+        if deriv_viol is not None:
+            # make it a tensor if not already
+            if not isinstance(deriv_viol, torch.Tensor):
+                deriv_viol = torch.tensor(deriv_viol, dtype=V_initial.dtype, device=V_initial.device)
 
-        # 3) Zero at Equilibrium Constraint
-        V_at_eq = self.compute_lyapunov_value(self.x_equilibrium.unsqueeze(0)).squeeze()
-        zero_constraint = 1.0 - torch.sqrt(V_at_eq + 1e-9)
+            deriv_viol = torch.clamp(deriv_viol, min=0.0, max=1.0)
+            # scale to [0,1]
+            deriv_viol = 1.0 - deriv_viol
+            deriv_viol = deriv_viol ** 2 # make it sharper
 
-        # 4) Progress toward eq (k-step instead of consecutive)
-        
-        distances = torch.norm(trajectories - self.x_equilibrium, p=2, dim=2)  # [B, H+1]
-        k = getattr(self, "progress_stride", 4)          # <-- set this on your trainer/config
-        # guard for short rollouts
-        k = max(1, min(k, distances.size(1) - 1))
-
-        # Compare distance now vs distance k steps later
-        # positive => moved closer over k steps
-        progress_steps = distances[:, :-k] - distances[:, k:]   # [B, H+1-k]
-
-        # Keep your original shaping (but now the diffs are larger so you can reduce the temp if you like)
-        progress = torch.sigmoid(100.0 * progress_steps.mean(dim=1))  # [B]
-
-
-        
-
-        # 5) control-effort fulfillment in [0,1]
-        effort_fulfillment = self._effort_fulfillment(u_values)  # [batch]
-        effort_fulfillment = effort_fulfillment**2.0
-
-        # 6) Monotonic architecture fulfillment
-        monotonic_F = self._monotonic_fulfillment()
-        # broadcast to [B] so shapes match the rest of the FPL terms
-        monotonic_F = torch.ones_like(V_decrease) * monotonic_F
-        
-
-        # 1) Stepwise Lyapunov exponential decrease:  V_{t+1} <= (1 - K) * V_t  for all t
-        K = getattr(self, "K_decay", 0.1)      # expose if you want to tune it
-        eps = 1e-6                               # ignore steps where V_t is tiny
-
-        # V_values: [B, H+1]  → split into per-step pairs
-        Vt   = V_values[:, :-1]                  # [B, H]
-        Vtp1 = V_values[:,  1:]                  # [B, H]
-
-        # Only enforce on steps where V_t is not tiny (avoids division-by-zero behavior near eq)
-        valid_mask = Vt > eps                    # [B, H]
-
-        # Target bound and violation per step
-        target = (1.0 - K) * Vt                  # [B, H]
-        viol   = torch.relu(Vtp1 - target)       # [B, H], 0 when satisfied
-
-        # Treat invalid steps as auto-satisfied to keep shapes and prevent undue penalty
-        viol = torch.where(valid_mask, viol, torch.zeros_like(viol))
-
-        # Turn each step's violation into a fulfillment in (0,1]; larger is better.
-        # Use an exponential/softplus shaping to avoid early saturation.
-        beta = 10.0
-        per_step_F = torch.exp(-beta * viol)     # [B, H], 1 when no violation
-
-        # AND-like aggregate across time: use your p-mean helper with a strong negative p
-        v_dot_per_step_fulfillment = p_mean(per_step_F, p=-6.0, dim=1)   # [B]
-
-
-
-        # Build FPL tree
+        # Build FPL structure matching TF version
         fpl_structure = FPLConstraint(
-            p_value=-2.0,
+            p_value=-2.0,  # TF uses 0.0 at top level (geometric mean)
             constraints={
-                "stability": FPLConstraint(
-                    p_value=-4.0,
-                    constraints={
-                        "decrease": p_mean(decrease_satisfaction, -6.0),
-                        # "v_dot": p_mean(v_dot_fulfillment, -6.0),
-                        "v_dot_per_step": p_mean(v_dot_per_step_fulfillment, -6.0),
-                    },
-                ),
-                # "architecture": p_mean(monotonic_F, -6.0),  
-                "performance": FPLConstraint(
-                    p_value=-2.0,
-                    constraints={
-                        # "effort": p_mean(effort_fulfillment, -2.0),
-                        "performance": p_mean(progress, -2.0),
-                    },
-                ),
-            #     "in_bounds": p_mean(F_bounds, -2.0),
+                # "close_angles": close_angles**2,  # Direct tensor, not p_mean wrapped
+                # "close_x" : close_x**2,          # Direct tensor, not p_mean wrapped
 
+                "lyapunov": FPLConstraint(
+                    p_value=-2.0,  # TF uses 0.0 here too
+                    constraints={
+                        # "pop": p_mean(proof_of_performance, -2.0),  # TF uses -1.0
+                        # "exp_decrease": p_mean(exp_decrease_fulfillment, -2.0),  # TF uses -1.0
+                        "decrease_satisfaction": p_mean(decrease_satisfaction, -6.0),  # TF uses -1.0
+                        "v_dot": p_mean(v_dot_fulfillment, -6.0),
+                        # "deriv_viol": p_mean(deriv_viol, -6.0) if deriv_viol is not None else V_initial.new_tensor(1.0),
+                    },
+                ),
             },
         )
-
-        # Use this for the actual loss (keeps gradients)
+        
         fulfillment = fpl_structure.evaluate()
         loss = 1.0 - fulfillment
-
-        # Build a DETACHED copy purely for logging/printing
+        
+        # Detached copy for logging
         def _detached_tree(c):
             if isinstance(c, torch.Tensor):
                 return c.detach()
             if isinstance(c, FPLConstraint):
                 return FPLConstraint(c.p_value, {k: _detached_tree(v) for k, v in c.constraints.items()})
             return c
-
+        
         fpl_structure_log = _detached_tree(fpl_structure)
-
+        
         return loss, fpl_structure_log
 
 
+def train_with_fpl_milp(trainer, dut, args, x_lo, x_up):
+    """
+    FPL training using MILP-found adversarial states instead of random sampling.
+    """
+    import copy
 
-def train_with_fpl(trainer, state_samples, args, randomize, x_lo, x_up, num_random_samples=1000):
+    # Control pool size for MILP solutions
+    dut.lyapunov_derivative_mip_pool_solutions = 100  # Increased to get top 100
+
+    # Setup parameters like in original train_with_fpl
+    params = []
+    params += list(trainer.lyapunov_system.lyapunov_relu.parameters())
+    params += list(trainer.R_options.variables())
+    params += trainer.closed_loop_system.controller_variables()
+    
+    optimizer = torch.optim.Adam(params, lr=args.learning_rate)
+    
+    # Initialize adversarial state pools
+    derivative_adversarial_pool = torch.empty((0, trainer.lyapunov_system.system.x_dim), dtype=torch.float64)
+    
+    violation_threshold = 1e-4  # Threshold to switch to regular training
+    max_adversarial_per_iter = 100  # Top N violations to collect
+    max_total_adversarials = 1000  # Cap total pool size
+    
+    epoch = 0
+    while epoch < args.pretrain_num_epochs:
+        # Step 1: Find adversarial states using MILP
+        print(f"\n=== MILP Adversarial Search at Epoch {epoch} ===")
+        
+        # Get derivative violations
+        derivative_mip, derivative_obj, derivative_adversarial, derivative_adversarial_next = dut.solve_lyap_derivative_mip()
+        
+        print(f"Derivative violation: {derivative_obj:.6f}")
+        
+        # Check if violations are below threshold
+        if derivative_obj < violation_threshold:
+            print(f"Violations below threshold {violation_threshold}, switching to regular training")
+            break
+            
+        if derivative_adversarial.shape[0] > 0:
+            derivative_adversarial_pool = torch.cat([
+                derivative_adversarial_pool,
+                derivative_adversarial[:max_adversarial_per_iter]
+            ], dim=0)
+            if derivative_adversarial_pool.shape[0] > max_total_adversarials:
+                derivative_adversarial_pool = derivative_adversarial_pool[-max_total_adversarials:]
+
+        print(f"Collected {derivative_adversarial_pool.shape[0]} adversarial states for training")
+        
+        # Step 2: Train with FPL on adversarial states
+        if derivative_adversarial_pool.shape[0] > 0:
+
+            # Create batched dataset
+            dataset = torch.utils.data.TensorDataset(derivative_adversarial_pool)
+            dataloader = torch.utils.data.DataLoader(
+                dataset, batch_size=min(args.batch_size, derivative_adversarial_pool.shape[0]), shuffle=True
+            )
+            
+            # Run FPL training for a few sub-epochs on these adversarial states
+            sub_epochs = derivative_adversarial_pool.shape[0] // 5
+            sub_epochs = min(sub_epochs, 30)  
+
+            for sub_epoch in range(sub_epochs):
+                epoch_losses = []
+                
+                for batch_idx, (batch_states,) in enumerate(dataloader):
+                    optimizer.zero_grad()
+
+                    # Augment the batch with random states occasionally
+                    if batch_idx % 4 == 0:
+                        state_dim = batch_states.shape[1]
+                        random_states = torch.empty((batch_states.shape[0], state_dim)).uniform_(0, 1)
+                        random_states = x_lo + (x_up - x_lo) * random_states
+                        batch_states = torch.cat([batch_states, random_states], dim=0)
+                    
+                    # Compute FPL loss with trajectory rollout
+                    loss, fpl_structure = trainer.compute_fpl_loss(
+                        batch_states,
+                        min_horizon=min(sub_epoch // 3, 30),
+                        max_horizon=40,
+                    )
+                    
+                    loss.backward()
+                    optimizer.step()
+                    epoch_losses.append(loss.item())
+
+                avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
+                print(f"  Sub-epoch {sub_epoch} Average Fulfillment: {1 - avg_loss:.4f}")
+
+        epoch += 1
+    
+    print("\n=== Switching to regular gradient-based training ===")
+    return trainer
+
+
+def adaptive_fpl_milp_training(trainer, dut, args, x_lo, x_up):
+    """
+    Adaptive training that uses FPL on MILP violations, then switches to regular training.
+    """
+    switch_threshold = 5e-5  # Target convergence threshold
+    patience = 5
+    no_improve_count = 0
+    best_violation = float('inf')
+    
+    # Phase 1: FPL training on MILP adversarial states
+    print("=== Phase 1: FPL on MILP adversarial states ===")
+    
+    for epoch in range(args.pretrain_num_epochs):
+        # Get current violations
+        _, deriv_viol, deriv_adversarial, _ = dut.solve_lyap_derivative_mip()
+
+        current_violation = deriv_viol
+        
+        print(f"Epoch {epoch}: Violation = {current_violation:.8f}")
+        
+        # Check if we should switch to regular training
+        if current_violation < switch_threshold:
+            print(f"✓ Violations below threshold {switch_threshold}")
+            break
+            
+        # Check for improvement
+        if current_violation < best_violation - 1e-7:  # Small tolerance for numerical noise
+            best_violation = current_violation
+            no_improve_count = 0
+        else:
+            no_improve_count += 1
+            
+        # If no improvement for 'patience' epochs, switch strategy
+        if no_improve_count >= patience:
+            print(f"No improvement for {patience} epochs. Switching to MILP training.")
+            dut.learning_rate = 5e-4  # args.learning_rate
+            dut.lyapunov_positivity_mip_cost_weight = 0.0  # None
+            dut.patience = patience
+            dut.no_improve_count = 0
+            dut.best_violation = float('inf')
+            dut.train(torch.empty((0, 4), dtype=torch.float64))
+            no_improve_count = 0  # Reset counter
+            best_violation = float('inf')  # Reset best violation
+            # reset the pool of adversarial states
+            deriv_adversarial = torch.empty((0, trainer.lyapunov_system.system.x_dim), dtype=torch.float64)
+            # reset epoch to continue FPL training
+            epoch = 0
+            continue
+
+        # Continue FPL training on adversarial states
+        if deriv_adversarial.shape[0] > 0:
+            top_adversarial = deriv_adversarial 
+
+            # Quick FPL training on these states
+            params = list(trainer.lyapunov_system.lyapunov_relu.parameters()) + \
+                    list(trainer.R_options.variables()) + \
+                    trainer.closed_loop_system.controller_variables()
+            optimizer = torch.optim.Adam(params, lr=args.learning_rate)
+            
+            for sub_iter in range(64):  # Few sub-iterations per epoch
+                optimizer.zero_grad()
+                # # Compute FPL loss using the MILP deriv_viol as one of the fulfillments
+                # state_dim = top_adversarial.shape[1]
+                # random_states = torch.empty((top_adversarial.shape[0], state_dim)).uniform_(0, 1)
+                # random_states = x_lo + (x_up - x_lo) * random_states
+                # # augment with random states to maintain diversity
+                # top_adversarial = torch.cat([top_adversarial, random_states], dim=0)
+
+                loss, _ = trainer.compute_fpl_loss(top_adversarial, min_horizon=3, max_horizon=30, deriv_viol=deriv_viol)
+                loss.backward()
+                optimizer.step()
+    
+    # Phase 2: Regular gradient-based training for final convergence
+    print("\n=== Phase 2: Regular gradient-based training ===")
+    dut.learning_rate = 3e-3
+    dut.max_iterations = 1  # Or whatever you want
+    success, _, _, final_deriv_viol = dut.train(torch.empty((0, 4), dtype=torch.float64))
+    
+    return success, final_deriv_viol
+
+def train_with_fpl(trainer, state_samples, args, randomize, x_lo, x_up):
     """
     Enhanced training loop using FPL composition.
     """
@@ -545,8 +671,8 @@ def train_with_fpl(trainer, state_samples, args, randomize, x_lo, x_up, num_rand
             # Compute FPL loss with trajectory rollout
             loss, fpl_structure = trainer.compute_fpl_loss(
                 batch_states,
-                min_horizon=30,
-                max_horizon=40,
+                min_horizon=min(epoch // 3 + 3, 30),
+                max_horizon=30,
             )
 
             loss.backward()
@@ -598,7 +724,7 @@ def train_with_fpl(trainer, state_samples, args, randomize, x_lo, x_up, num_rand
             print(f"  >> New best model! Fulfillment: {best_fulfillment:.4f}")
 
         # Early stopping if converged
-        if avg_fulfillment >= 0.98:
+        if avg_fulfillment >= 0.9:
             print("Converged!")
             break
 
@@ -615,7 +741,7 @@ def train_with_fpl(trainer, state_samples, args, randomize, x_lo, x_up, num_rand
     if hasattr(trainer, 'save_network_path') or hasattr(args, 'save_path'):
         save_path = getattr(trainer, 'save_network_path', getattr(args, 'save_path', './'))
         torch.save(trainer.lyapunov_system.lyapunov_relu, f"{save_path}/best_lyapunov.pt")
-        torch.save(trainer.closed_loop_system.controller, f"{save_path}/best_controller.pt")
+        torch.save(trainer.closed_loop_system.controller_network, f"{save_path}/best_controller.pt")
         torch.save(best_model_state['R_options'], f"{save_path}/best_R.pt")
         
         # Save metadata

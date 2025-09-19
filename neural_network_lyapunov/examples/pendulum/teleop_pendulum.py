@@ -406,6 +406,12 @@ def main():
         choices=["keyboard", "lqr", "energy", "pid", "zero", "NN"],
         help="Controller type.",
     )
+    parser.add_argument(
+        "--controller-model",
+        type=str,
+        default="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10/monotonic_bound10_controller.pt",
+        help="Path to torch model (φ: [theta, thetadot, u]->x_next).",
+    )
     parser.add_argument("--umax", type=float, default=20.0, help="Max |torque| (N⋅m).")
     parser.add_argument(
         "--du", type=float, default=0.5, help="Torque increment (keyboard)."
@@ -475,7 +481,7 @@ def main():
         # "neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_controller.pt"
         # "neural_network_lyapunov/examples/pendulum/data/pendulum_controller4.pt"
         # "neural_network_lyapunov/examples/examples_in_paper/pendulum/controller19.pt"
-        controller_path = "neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_controller.pt"
+        controller_path = args.controller_model
         try:
 
             controller_relu = torch.load(controller_path)

@@ -488,5 +488,8 @@ if __name__ == "__main__":
         dut.lyapunov_positivity_mip_cost_weight = 0.
         # dut.boundary_value_gap_mip_cost_weight = 0.0
         # dut.lyapunov_upper = 1.#1.#None
+        dut.patience = 1e6
+        dut.no_improve_count = 0
+        dut.best_violation = float('inf')
         dut.train(torch.empty((0, 3), dtype=torch.float64))
     pass

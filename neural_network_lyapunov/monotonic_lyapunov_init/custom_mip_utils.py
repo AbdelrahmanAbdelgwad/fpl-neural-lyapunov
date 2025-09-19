@@ -552,7 +552,7 @@ def propagate_bounds(layer, input_lo, input_up):
         else:
             output_lo = lo
             output_up = up
-    elif isinstance(layer, monotonic_utils.LinearyLayer):
+    elif type(layer).__name__ == 'LinearyLayer':
         bias = (
             torch.zeros((layer.out_features,), dtype=dtype)
             if layer.bias is None
