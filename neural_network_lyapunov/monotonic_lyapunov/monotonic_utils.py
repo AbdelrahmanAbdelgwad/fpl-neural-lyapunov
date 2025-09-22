@@ -62,10 +62,12 @@ def generate_partition_space(size_partition,dtype=torch.float64,size_in=2,seed=9
             v_samples = np.random.rand(size_partition-provided_v.shape[0]-size_in*2,size_in)-0.5
             v_samples = v_samples/np.linalg.norm(v_samples,axis=1)[:, np.newaxis]
             v_samples = np.concatenate((axis_v_samples,provided_v,v_samples),axis=0)
-        else: 
+        elif size_partition-size_in*2>0: 
             idx = np.random.choice(provided_v.shape[0], size_partition-size_in*2,replace=False)
             v_samples = provided_v[idx,:]
             v_samples = np.concatenate((axis_v_samples,v_samples),axis=0)
+        else:
+            v_samples = provided_v # print(v_samples)
         # if provided_v.shape[0]<size_partition:
         #     np.random.seed(seed=seed)
         #     v_samples = np.random.rand(size_partition-provided_v.shape[0],size_in)-0.5
