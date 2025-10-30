@@ -193,14 +193,15 @@ def train_controller_approximator(state_samples, control_samples, controller_rel
     control_equilibrium = torch.tensor([0], dtype=torch.float64)
 
     def compute_control(model, dataset):
+        
         return model(dataset) - model(state_equilibrium) + control_equilibrium
 
     utils.train_approximator(
         control_dataset,
         controller_relu,
         compute_control,
-        batch_size=20,
-        num_epochs=400,
+        batch_size=512,
+        num_epochs=50,
         lr=lr,
     )
 
@@ -360,8 +361,9 @@ if __name__ == "__main__":
         state_samples, control_samples, cost_samples = generate_controller_dataset()
     elif args.load_controller_cost_data:
         controller_cost_data = torch.load(
-            dir_path + "/data/pendulum_controller_cost_data.pt"
-        )
+            # dir_path + "/data/pendulum_controller_cost_data.pt"
+            "/home/abdelrahman/projects/Neural_Lyapunov_Control/neural-network-lyap-control-roa/neural_network_lyapunov/examples/pendulum/data/controller_cost_dataset.pt"
+        , map_location=torch.device("cpu"))
         state_samples = controller_cost_data["state_samples"]
         control_samples = controller_cost_data["control_samples"]
         cost_samples = controller_cost_data["cost_samples"]
@@ -386,7 +388,7 @@ if __name__ == "__main__":
         controller_relu = torch.load(args.load_controller_relu)
 
     plant = pendulum.Pendulum(torch.float64)
-    lqr_gain = plant.lqr_control(np.diag([1.0, 10.0]), np.array([[1.0]]))
+    lqr_gain = plant.lqr_control(np.diag([1.0, 10.0]), np.array([[1.0]]), x_des=[np.pi, 0])
 
     lyapunov_relu = utils.setup_relu(
         (2, 8, 8, 6, 1), params=None, negative_slope=0.1, bias=True, dtype=torch.float64

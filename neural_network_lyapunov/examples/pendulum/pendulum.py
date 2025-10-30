@@ -82,8 +82,18 @@ class Pendulum:
             [[0], [1 / (self.mass * self.length * self.length)]], dtype=self.dtype
         )
         return A, B
+    
+    def next_pose(self, x, u, dt):
+        """
+        Computes the next pose of the pendulum after dt.
+        """
+        x_np = x.detach().numpy() if isinstance(x, torch.Tensor) else x
+        u_np = u.detach().numpy() if isinstance(u, torch.Tensor) else u
+        result = scipy.integrate.solve_ivp(
+            lambda t, x_val: self.dynamics(x_val, u_np), [0, dt], x_np)
+        return result.y[:, -1]
 
-    def lqr_control(self, Q, R):
+    def lqr_control(self, Q, R, x_des):
         """
         lqr control around the equilibrium (pi, 0).
         returns the controller gain K
@@ -92,7 +102,7 @@ class Pendulum:
         # First linearize the dynamics
         # The dynamics is
         # thetaddot = (u - mgl * sin(theta) - b*thetadot) / (ml^2)
-        A, B = self.dynamics_gradient(torch.tensor([np.pi, 0], dtype=self.dtype))
+        A, B = self.dynamics_gradient(torch.tensor([x_des[0], x_des[1]], dtype=self.dtype))
         S = scipy.linalg.solve_continuous_are(
             A.detach().numpy(), B.detach().numpy(), Q, R
         )

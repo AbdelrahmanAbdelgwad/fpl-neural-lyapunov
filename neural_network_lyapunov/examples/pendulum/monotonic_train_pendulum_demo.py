@@ -22,11 +22,10 @@ import argparse
 import os
 
 # === FPL INTEGRATION: START (imports) ===
-from neural_network_lyapunov.examples.pendulum.preprocess.fpl import (
+from neural_network_lyapunov.examples.pendulum.preprocess.fpl_pendulum import (
     FPLMonotonicLyapunovTrainer,
     train_with_fpl,
 )
-
 # === FPL INTEGRATION: END (imports) ===
 
 import random
@@ -484,15 +483,18 @@ if __name__ == "__main__":
         controller_relu = torch.load(args.load_controller_relu)
 
     plant = pendulum.Pendulum(torch.float64)
-    lqr_gain = plant.lqr_control(np.diag([1.0, 10.0]), np.array([[1.0]]))
+    lqr_gain = plant.lqr_control(np.diag([1.0, 10.0]), np.array([[1.0]]), x_des=[np.pi, 0])
 
     # Now train the controller and Lyapunov function together
     q_equilibrium = torch.tensor([np.pi], dtype=torch.float64)
     u_equilibrium = torch.tensor([0], dtype=torch.float64)
     # x_lo = torch.tensor([np.pi - 0.1 * np.pi, -0.5], dtype=torch.float64)
     # x_up = torch.tensor([np.pi + 0.1 * np.pi, 0.5], dtype=torch.float64)
+
     u_lo = torch.tensor([-20], dtype=torch.float64)
     u_up = torch.tensor([20], dtype=torch.float64)
+    # u_lo = torch.tensor([-8], dtype=torch.float64)
+    # u_up = torch.tensor([8], dtype=torch.float64)
     forward_system = relu_system.ReLUSecondOrderSystemGivenEquilibrium(
         torch.float64,
         x_lo,
@@ -507,7 +509,7 @@ if __name__ == "__main__":
 
     if args.load_lyapunov_R is not None:
         R = torch.load(args.load_lyapunov_R)
-        R = project_to_psd(R)
+        # R = project_to_psd(R)
         print("Loaded R is: ", R)
     else:
         R = torch.cat((rotation_matrix(np.pi / 4), rotation_matrix(np.pi / 10)), dim=0)
@@ -608,10 +610,14 @@ if __name__ == "__main__":
         # Reuse your dense grid if already defined; otherwise create a sensible default grid
         state_dim = forward_system.x_equilibrium.numel()
         if "state_samples_all" not in locals():
-            grid_sizes = (26,) * state_dim  # adjust if needed
+            grid_sizes = (51,) * state_dim  # adjust if needed
             state_samples_all = utils.get_meshgrid_samples(
                 x_lo, x_up, grid_sizes, dtype=torch.float64
             )
+            
+            # clip the samples to be within the bounds
+            state_samples_all = torch.max(torch.min(state_samples_all, x_up), x_lo)
+
 
         # Hand control to the FPL loop (uses args.learning_rate & args.batch_size)
         train_with_fpl(fpl_trainer, state_samples_all, args)

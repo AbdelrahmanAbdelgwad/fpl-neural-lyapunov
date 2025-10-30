@@ -213,6 +213,11 @@ if __name__ == "__main__":
                   dim=0)
 
     
+    dynamics_model_path = (
+            "neural_network_lyapunov/examples/path_following_unicycle/data/preprocess/path_following_unicycle_forward_model.pt"
+        )
+    dynamics_model = torch.load(dynamics_model_path, map_location="cpu")
+
     # Now train the controller and Lyapunov function together
     q_equilibrium = torch.tensor([np.pi], dtype=torch.float64)
     u_equilibrium = torch.tensor([0], dtype=torch.float64)

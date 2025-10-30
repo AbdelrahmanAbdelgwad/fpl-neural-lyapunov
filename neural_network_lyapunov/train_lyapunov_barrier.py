@@ -1027,19 +1027,20 @@ class Trainer:
                 )
                 torch.save(self.R_options.R(), self.save_network_path + f'{"R.pt"}')
 
+                # if isinstance(
+                #     self.lyapunov_hybrid_system.system,
+                #     unicycle_feedback_system.UnicycleFeedbackSystem,
+                # ):
+                #     torch.save(
+                #         self.lyapunov_hybrid_system.system.controller_network,
+                #         self.save_network_path + f'{"controller.pt"}',
+                #     )
+                #     torch.save(
+                #         self.lyapunov_hybrid_system.system.Ru_options.R(),
+                #         self.save_network_path + f'{"Ru.pt"}',
+                #     )
+                # elif isinstance(
                 if isinstance(
-                    self.lyapunov_hybrid_system.system,
-                    unicycle_feedback_system.UnicycleFeedbackSystem,
-                ):
-                    torch.save(
-                        self.lyapunov_hybrid_system.system.controller_network,
-                        self.save_network_path + f'{"controller.pt"}',
-                    )
-                    torch.save(
-                        self.lyapunov_hybrid_system.system.Ru_options.R(),
-                        self.save_network_path + f'{"Ru.pt"}',
-                    )
-                elif isinstance(
                     self.lyapunov_hybrid_system.system, feedback_system.FeedbackSystem
                 ):
                     torch.save(

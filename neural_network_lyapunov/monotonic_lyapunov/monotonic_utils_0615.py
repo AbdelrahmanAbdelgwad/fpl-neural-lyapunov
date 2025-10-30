@@ -111,8 +111,14 @@ class LinearyLayer(nn.Module):
             size_partition,
             size_piecewise,
         )
-        self.v, self.epsilon = partition_space.to(device), grad_limit
-        self.x_eqlm = x_eqlm.to(device)
+        self.epsilon = grad_limit
+        # v, x_eqlm as buffers so they move with .to(device)
+        self.register_buffer("v", partition_space.to(device))
+        self.register_buffer(
+            "x_eqlm",
+            (x_eqlm.to(device) if x_eqlm is not None else torch.zeros(self.size_in, dtype=dtype, device=device))
+        )
+        
         self.dtype = dtype
         torch.manual_seed(0)
         if case == 1:
@@ -125,9 +131,13 @@ class LinearyLayer(nn.Module):
             )
         # self.reset_parameters()
 
-        self.F_1, self.F_2, self.F_3, self.G = get_monotic_params(
-            self.size_piecewise, self.epsilon, dtype=dtype, device=device
-        )
+        # F_1/F_2/F_3/G as buffers so they move with .to(device)
+        F_1, F_2, F_3, G = get_monotic_params(self.size_piecewise, self.epsilon, dtype=dtype, device=device)
+        self.register_buffer("F_1", F_1)
+        self.register_buffer("F_2", F_2)
+        self.register_buffer("F_3", F_3)
+        self.register_buffer("G",   G)
+        
         self.case = case
         self.init_parameters()
         self.reset_parameters()
@@ -145,57 +155,63 @@ class LinearyLayer(nn.Module):
             torch.nn.init.uniform_(self.a_input, a=0.0, b=1.0)
 
     def reset_parameters(self) -> None:
+        # Anchor to a parameter’s device (b_input for case 1, a_input for case 2)
         if self.case == 1:
-            # self.b_input.data = torch.clamp(self.b_input.data,1e-1)
+            dev = self.b_input.device
+        else:
+            dev = self.a_input.device
+        dt = self.dtype if self.dtype is not None else torch.float64
 
+        # Local views on the right device (don’t mutate stored buffers)
+        v_local  = self.v  if self.v.device  == dev else self.v.to(dev)
+        G_local  = self.G  if self.G.device  == dev else self.G.to(dev)
+        F1_local = self.F_1 if self.F_1.device == dev else self.F_1.to(dev)
+        F2_local = self.F_2 if self.F_2.device == dev else self.F_2.to(dev)
+        F3_local = self.F_3 if self.F_3.device == dev else self.F_3.to(dev)
+        xeq_local = None if self.x_eqlm is None else (self.x_eqlm if self.x_eqlm.device == dev else self.x_eqlm.to(dev))
+
+        if self.case == 1:
             self.b_input.data.clamp_(1e-1)
-            self.b = self.b_input @ self.G
-            self.weight = torch.repeat_interleave(self.v, self.size_piecewise, dim=0)
-            if self.x_eqlm is None:
+            self.b = self.b_input @ G_local
+            self.weight = torch.repeat_interleave(v_local, self.size_piecewise, dim=0)
+            if xeq_local is None:
                 self.bias = -self.b.reshape(-1)
             else:
-                self.bias = -(
-                    self.b
-                    + (self.v @ self.x_eqlm[..., None])
-                    @ torch.ones(1, self.size_piecewise, dtype=self.dtype).to(
-                        self.device
-                    )
-                ).reshape(-1)
+                ones_local = torch.ones(1, self.size_piecewise, dtype=dt, device=dev)
+                self.bias = -(self.b + (v_local @ xeq_local[..., None]) @ ones_local).reshape(-1)
+
+            # Ensure grads are enabled where you expect them
+            if not self.b.requires_grad:
+                self.b.requires_grad_(True)
             try:
                 self.b.retain_grad()
-            except:
-                # RuntimeError: can't retain_grad on Tensor that has requires_grad=False
-                # change to requires_grad=True then
-                self.b = self.b.requires_grad_()
-                self.b.retain_grad()
+            except RuntimeError:
+                pass
 
         else:
-            # self.a_input.data = torch.clamp(self.a_input.data,0.)
-
-            self.a_input.data.clamp_(0.0)
-            self.a = (
-                self.a_input @ self.F_1
-                + self.F_2.tile(self.a_input.shape[0], 1)
-                + self.F_3.tile(self.a_input.shape[0], 1)
-            )
-            self.bias = (
-                torch.zeros((1,), dtype=self.dtype).to(self.device).requires_grad_()
-            )
+            self.a_input.data.clamp_(0.)
+            self.a = self.a_input @ F1_local + F2_local.tile(self.a_input.shape[0], 1) + F3_local.tile(self.a_input.shape[0], 1)
+            self.bias = torch.zeros((1,), dtype=dt, device=dev).requires_grad_()
             self.weight = self.a.reshape(-1)[..., None].t()
+            if not self.a.requires_grad:
+                self.a.requires_grad_(True)
             try:
                 self.a.retain_grad()
-            except:
-                self.a = self.a.requires_grad_()
-                self.a.retain_grad()
-            
-        try:
-            self.bias.retain_grad()
-            self.weight.retain_grad()
-        except:
-            self.bias = self.bias.requires_grad_()
-            self.weight = self.weight.requires_grad_()
-            self.bias.retain_grad()
-            self.weight.retain_grad()
+            except RuntimeError:
+                pass
+
+        # Keep for debugging if needed:
+        # print("reset_parameters:", __file__, "b_input:", (self.b_input.device if self.case==1 else "NA"),
+        #       "G:", G_local.device, "v:", v_local.device)
+
+        for t in (self.bias, self.weight):
+            if not t.requires_grad:
+                t.requires_grad_(True)
+            try:
+                t.retain_grad()
+            except RuntimeError:
+                pass
+
 
     def forward(self, x):
         self.reset_parameters()

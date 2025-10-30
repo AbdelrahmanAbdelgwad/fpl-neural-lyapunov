@@ -148,11 +148,16 @@ class ForwardModelCartPole:
                 # Center at equilibrium to enforce ẍ=θ̈=0 at (x*,u*)
                 y = y - self.y_eq.reshape(-1)
                 x_ddot, th_ddot = float(y[0]), float(y[1])
+                # Match training: compute v_next first
+                v_next = np.array([x[2] + x_ddot * self.dt, 
+                                x[3] + th_ddot * self.dt])
+                
+                # Then use midpoint rule for position
                 x_next = np.array([
-                    x[0] + x[2] * self.dt,
-                    wrap_angle(x[1] + x[3] * self.dt),
-                    x[2] + x_ddot * self.dt,
-                    x[3] + th_ddot * self.dt,
+                    x[0] + (x[2] + v_next[0]) * self.dt / 2,  # midpoint
+                    wrap_angle(x[1] + (x[3] + v_next[1]) * self.dt / 2),  # midpoint
+                    v_next[0],
+                    v_next[1],
                 ])
             elif self.output == "delta":
                 if y.numel() != 4:
@@ -176,7 +181,7 @@ def make_lqr_controller(plant: Cart_Pole, Q: np.ndarray, R: np.ndarray,
     K, S = plant.lqr_control(Q, R, x_eq, u_eq)
 
     def ufun(x: np.ndarray) -> float:
-        return float((-K @ (x - x_eq)).item() + u_eq.item())
+        return float((K @ (x - x_eq)).item() + u_eq.item())
 
     return ufun, K, S
 
@@ -336,7 +341,11 @@ def main():
     running, paused = True, False
     compare = args.compare and (model.model is not None)
 
+    steps_count = 0
+    converged = False
+
     while running:
+        
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -497,8 +506,16 @@ def main():
         pygame.display.flip()
         clock.tick(int(1.0 / args.dt))
 
+        steps_count += 1
+        print(f"Step {steps_count}, t={steps_count * args.dt:.2f} s", end='\r')
+        if not paused and not converged:
+            # Check convergence to upright (norm(x - x_eq) < 1e-3)
+            if np.linalg.norm(x_model - np.array([0.0, 0.0, 0.0, 0.0])) < 1e-3:
+                converged = True
+                print(f"Converged to upright at step {steps_count}, t={steps_count * args.dt:.2f} s")
+                break
     pygame.quit()
-
+    print(f"Total steps: {steps_count}, time: {steps_count * args.dt:.2f} s")
 
 if __name__ == "__main__":
     main()

@@ -27,14 +27,14 @@ for i in {1..10}; do
         python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
             --bound_level=$i \
             --bound_level_last=$(($i-1)) \
-            --search_R \
+            # --search_R \
 
             # --max_iterations=1000
     else
         python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
             --bound_level=$i \
             --bound_level_last=$(($i-1)) \
-            --search_R \
+            # --search_R \
 
             # --max_iterations=1000
     fi

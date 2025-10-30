@@ -26,8 +26,8 @@ for i in {1..100}; do
         python neural_network_lyapunov/examples/cart_pole/monotonic_train_cart_pole_demo.py \
             --bound_level=$i \
             --use_fpl \
-            --pretrain_num_epochs=5000 \
-            --max_iterations=1 \
+            # --pretrain_num_epochs=5000 \
+            # --max_iterations=500 \
             # --load_lyapunov_relu="${CKPT_DIR}/monotonic_bound40_fpl_lyapunov.pt" \
             # --load_controller_relu="${CKPT_DIR}/monotonic_bound40_fpl_controller.pt" \
             # --load_lyapunov_R="${CKPT_DIR}/monotonic_bound40_fpl_R.pt" \
@@ -37,8 +37,8 @@ for i in {1..100}; do
             --bound_level=$i \
             --bound_level_last=$(($i-1)) \
             --use_fpl \
-            --max_iterations=1 \
-            --pretrain_num_epochs=5000 \
+            # --max_iterations=500 \
+            # --pretrain_num_epochs=5000 \
 
     fi
 done

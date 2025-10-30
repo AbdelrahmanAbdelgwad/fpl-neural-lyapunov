@@ -21,6 +21,7 @@ SECONDS=0
 
 python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
     --bound_level=40 \
+    --search_R \
 
 # Stop timer and report
 duration=$SECONDS

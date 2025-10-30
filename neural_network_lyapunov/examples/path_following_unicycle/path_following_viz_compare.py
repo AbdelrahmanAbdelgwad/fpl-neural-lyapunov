@@ -101,7 +101,8 @@ def simulate_trajectory_analytical_fast(plant, controller_relu, x_equilibrium, u
     if check_convergence:
         # Use event detection for early termination
         def convergence_event(t, x):
-            return np.sqrt(x[0]**2 + x[1]**2) - 0.05
+            return np.sqrt(x[0]**2 + x[1]**2) - 1e-3
+
         convergence_event.terminal = True
         convergence_event.direction = -1
         
@@ -140,7 +141,7 @@ def simulate_trajectory_ml_fast(forward_system, controller_relu, x_equilibrium, 
                 x_curr = forward_system.step_forward(x_curr, u_sat)
                 
                 error = torch.sqrt(x_curr[0]**2 + x_curr[1]**2)
-                if error < 0.05:
+                if error < 1e-3:
                     return True, _ * dt
         return False, T
     else:
@@ -193,13 +194,13 @@ def compute_convergence_regions_vectorized(configurations, n_samples, x_lo, x_up
                     if dynamics_type == 'Analytical' or (dynamics_type == 'Selected' and not use_ml_dynamics):
                         conv, _ = simulate_trajectory_analytical_fast(
                             plant, controller, x_equilibrium, u_equilibrium,
-                            u_lo, u_up, x0, T=25.0, check_convergence=True
+                            u_lo, u_up, x0, T=4.0, check_convergence=True
                         )
                         converged[i] = conv
                     else:  # ML or (Selected and use_ml_dynamics)
                         conv, _ = simulate_trajectory_ml_fast(
                             forward_system, controller, x_equilibrium, u_equilibrium,
-                            u_lo, u_up, x0, T=25.0, dt=0.01, check_convergence=True
+                            u_lo, u_up, x0, T=4.0, dt=0.01, check_convergence=True
                         )
                         converged[i] = conv
                 except:
@@ -411,7 +412,7 @@ def create_full_comparison_plots_optimized(bound_level=3, V_lambda=0.6, use_ml_d
     )
     
     # Number of samples
-    n_samples = 5000  # Fixed for consistency
+    n_samples = 1000  # Fixed for consistency
 
     configurations = [
         (controller_std, 'Analytical', 'Std-Analytical'),
@@ -489,6 +490,8 @@ def create_full_comparison_plots_optimized(bound_level=3, V_lambda=0.6, use_ml_d
     
     plt.tight_layout()
     return fig
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Visualize and compare path following controllers')

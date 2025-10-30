@@ -24,7 +24,12 @@ SECONDS=0
         --use_fpl \
         --bound_level=10 \
         --search_R \
-        
+        --pretrain_num_epochs=200 \
+        --batch_size=128 \
+        --learning_rate=1e-2 \
+        # --max_iterations=1 \
+
+
         # --load_lyapunov_relu="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_lyapunov.pt" \
         # --load_controller_relu="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_controller.pt" \
         # --load_lyapunov_R="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_R.pt" \
@@ -32,8 +37,6 @@ SECONDS=0
 
         # --bound_level_last=$(($i-1)) \
         # --bound_level=10 \
-        # --pretrain_num_epochs=80 \
-        # --max_iterations=500 \
         
 # done
 

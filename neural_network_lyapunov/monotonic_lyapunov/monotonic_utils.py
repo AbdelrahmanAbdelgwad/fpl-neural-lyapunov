@@ -88,8 +88,15 @@ class LinearyLayer(nn.Module):
         self.device = device
         self.size_in, self.size_out, self.size_partition, self.size_piecewise =\
     size_in, size_out,size_partition,size_piecewise
-        self.v, self.epsilon = partition_space.to(device),grad_limit
-        self.x_eqlm = x_eqlm.to(device)
+
+        # Register non-trainable tensors as buffers so .to(device) moves them.
+        self.register_buffer("v", partition_space.to(device))
+        self.epsilon = grad_limit
+        if x_eqlm is None:
+            self.register_buffer("x_eqlm", torch.zeros(self.size_in, dtype=dtype, device=device))
+        else:
+            self.register_buffer("x_eqlm", x_eqlm.to(device))
+
         self.dtype = dtype
         torch.manual_seed(0)
         if case==1:
@@ -97,8 +104,15 @@ class LinearyLayer(nn.Module):
         else:
             self.a_input =nn.Parameter(torch.empty((size_partition, size_piecewise), **factory_kwargs))
         # self.reset_parameters()
-        
-        self.F_1,self.F_2,self.F_3,self.G = get_monotic_params(self.size_piecewise,self.epsilon,dtype=dtype,device=device)
+
+        F_1,F_2,F_3,G = get_monotic_params(self.size_piecewise,self.epsilon,dtype=dtype,device=device)
+        # Make them buffers so they move with .to(device)
+        self.register_buffer("F_1", F_1)
+        self.register_buffer("F_2", F_2)
+        self.register_buffer("F_3", F_3)
+        self.register_buffer("G",   G)
+
+
         self.case = case
         self.init_parameters()
         self.reset_parameters()
@@ -114,35 +128,36 @@ class LinearyLayer(nn.Module):
             torch.nn.init.uniform_(self.b_input,a=0.1,b=0.5)
         else:
             torch.nn.init.uniform_(self.a_input,a=0.0,b=1.0)
+
     def reset_parameters(self) -> None:
-        # ##### Add these lines at the beginning to ensure everything is on the same device #####
-        if hasattr(self, 'x_eqlm') and self.x_eqlm is not None:
-            device = self.x_eqlm.device
-        else:
-            device = torch.device('cpu')  # default to CPU
-        
-        # Move v to the same device as x_eqlm
-        if hasattr(self, 'v') and self.v is not None:
-            self.v = self.v.to(device)
-        
-        # Update self.device to match
-        self.device = device
-        ########################################################################################
+        # Always anchor computations to the parameter device
+        dev = self.b_input.device if hasattr(self, "b_input") else (
+            next(self.parameters()).device if any(True for _ in self.parameters()) else (
+                next(self.buffers()).device
+            )
+        )
+        dt = self.dtype
+        # Use local tensors on the same device for computations (do not reassign module attrs)
+        v_local = self.v if self.v.device == dev else self.v.to(dev)
+        G_local = self.G if self.G.device == dev else self.G.to(dev)
+        xeq_local = None if self.x_eqlm is None else (
+            self.x_eqlm if self.x_eqlm.device == dev else self.x_eqlm.to(dev)
+        )
         
 
         if self.case == 1:
             # self.b_input.data = torch.clamp(self.b_input.data,1e-1)
             
             self.b_input.data.clamp_(1e-1)
-            self.b = self.b_input@self.G
-            self.weight = torch.repeat_interleave(self.v,self.size_piecewise,
-                                                        dim=0)
-            if self.x_eqlm is None:
+            self.b = self.b_input @ G_local
+            self.weight = torch.repeat_interleave(v_local, self.size_piecewise,
+                                                  dim=0)
+            if xeq_local is None:
                 self.bias = -self.b.reshape(-1)
             else:
                 
-                self.bias = -(self.b + \
-                    (self.v@self.x_eqlm[...,None])@torch.ones(1,self.size_piecewise,dtype=self.dtype).to(self.device)).reshape(-1)
+                ones_local = torch.ones(1, self.size_piecewise, dtype=dt, device=dev)
+                self.bias = -(self.b + (v_local @ xeq_local[..., None]) @ ones_local).reshape(-1)
             # requires_grad=True
             self.b.requires_grad=True
             self.b.retain_grad()
@@ -151,10 +166,14 @@ class LinearyLayer(nn.Module):
             # self.a_input.data = torch.clamp(self.a_input.data,0.)
             
             self.a_input.data.clamp_(0.)
-            self.a = self.a_input@self.F_1 + \
-                self.F_2.tile(self.a_input.shape[0],1)+ \
-                self.F_3.tile(self.a_input.shape[0],1)
-            self.bias = torch.zeros((1,), dtype=self.dtype).to(self.device).requires_grad_() 
+            F1_local = self.F_1 if self.F_1.device == dev else self.F_1.to(dev)
+            F2_local = self.F_2 if self.F_2.device == dev else self.F_2.to(dev)
+            F3_local = self.F_3 if self.F_3.device == dev else self.F_3.to(dev)
+            self.a = self.a_input @ F1_local + \
+                F2_local.tile(self.a_input.shape[0], 1) + \
+                F3_local.tile(self.a_input.shape[0], 1)
+            self.bias = torch.zeros((1,), dtype=dt, device=dev).requires_grad_()
+
             self.weight = self.a.reshape(-1)[...,None].t()
             # requires_grad=True
             self.a.requires_grad=True

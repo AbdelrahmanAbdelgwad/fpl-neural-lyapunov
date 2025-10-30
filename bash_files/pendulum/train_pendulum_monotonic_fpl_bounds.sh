@@ -19,16 +19,22 @@ source ./config/setup_environments.sh
 # Start timer
 SECONDS=0
 
-for i in {1..40}; do
-    # if [ "$i" -eq 1 ]; then
-    #     python neural_network_lyapunov/examples/path_following_unicycle/monotonic_linf_train_path_following_demo.py \
-    #         --bound_level=$i \
-    #         --bound_level_last=$(($i-1)) \
-    # else
-    python neural_network_lyapunov/examples/path_following_unicycle/monotonic_linf_train_path_following_demo.py \
+for i in {1..10}; do
+    python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
+        --use_fpl \
+        --bound_level_last=$(($i-1)) \
         --bound_level=$i \
-        --bound_level_last=$(($i-1))
-    # fi
+        --search_R \
+        --pretrain_num_epochs=80 \
+
+        # --load_lyapunov_relu="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_lyapunov.pt" \
+        # --load_controller_relu="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_controller.pt" \
+        # --load_lyapunov_R="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_R.pt" \
+
+        # --bound_level=10 \
+
+        # --max_iterations=500 \
+        
 done
 
 # Stop timer and report

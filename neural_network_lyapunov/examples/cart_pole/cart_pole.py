@@ -18,7 +18,7 @@ class Cart_Pole:
         self.M = 1
         self.m = 0.1    
         self.l = 1
-        self.g = 9.81
+        self.g = -9.81
         
 
     def dynamics(self, x, u):

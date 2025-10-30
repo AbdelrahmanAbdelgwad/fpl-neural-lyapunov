@@ -6,14 +6,15 @@ import neural_network_lyapunov.relu_system as relu_system
 import neural_network_lyapunov.train_utils as train_utils
 import neural_network_lyapunov.r_options as r_options
 
-# import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_lyapunov as lyapunov
-# import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_train_lyapunov_barrier as train_lyapunov_barrier
+import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_lyapunov as lyapunov
+import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov_only_working.custom_train_lyapunov_barrier as train_lyapunov_barrier
 # import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils as monotonic_utils
+import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
 
-import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
-import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
+# import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
+# import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
 # import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
-import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils_v2 as monotonic_utils
+# import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils_v2 as monotonic_utils
 
 
 # import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
@@ -346,7 +347,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    args.search_R = False
+    # args.search_R = False
     search_controllerFalg = True  # True
     if not search_controllerFalg:
         args.load_controller_relu = (
@@ -431,6 +432,7 @@ if __name__ == "__main__":
     else:  # if args.load_forward_model:
         dynamics_model_path = (
             dir_path + "/data/preprocess/cart_pole_forward_model_3d.pt"
+            # dir_path + "/data/preprocess/cartpole_model_correct_gravity.pt"
         )
         # dynamics_relu = utils.setup_relu(
         #     dynamics_model_data["linear_layer_width"],
@@ -452,7 +454,7 @@ if __name__ == "__main__":
         control_samples = controller_cost_data["control_samples"]
         cost_samples = controller_cost_data["cost_samples"]
 
-    V_lambda = 0.6
+    V_lambda = 0.5
     controller_relu = utils.setup_relu(
         (4, 5, 5, 1), params=None, negative_slope=0.1, bias=True, dtype=torch.float64
     )
@@ -578,7 +580,7 @@ if __name__ == "__main__":
     )
     dut.lyapunov_positivity_mip_pool_solutions = 1
     dut.lyapunov_derivative_mip_pool_solutions = 1
-    dut.lyapunov_derivative_convergence_tol = 2.5 * 1e-5
+    dut.lyapunov_derivative_convergence_tol = 2.5e-05
     dut.max_iterations = args.max_iterations
     dut.lyapunov_positivity_epsilon = 0.5  # 0.5
     dut.lyapunov_derivative_epsilon = 0.001  # 0.001
@@ -606,7 +608,7 @@ if __name__ == "__main__":
             x_lo, x_up, (5, 5, 5, 5), dtype=torch.float64
         )
         # Use MILP-based FPL training
-        fpl_trainer = train_with_fpl(fpl_trainer, state_samples_all_fpl, args, randomize=True, x_lo=x_lo, x_up=x_up)
+        fpl_trainer = train_with_fpl(fpl_trainer, state_samples_all_fpl, args, randomize=False, x_lo=x_lo, x_up=x_up)
         # fpl_trainer = train_with_fpl_milp(fpl_trainer, dut, args, x_lo, x_up)
         # fpl_trainer = adaptive_fpl_milp_training(fpl_trainer, dut, args, x_lo, x_up)
     

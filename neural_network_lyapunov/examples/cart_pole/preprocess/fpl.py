@@ -423,12 +423,12 @@ class FPLMonotonicLyapunovTrainer:
                 # "close_x" : close_x**2,          # Direct tensor, not p_mean wrapped
 
                 "lyapunov": FPLConstraint(
-                    p_value=-2.0,  # TF uses 0.0 here too
+                    p_value=-0.0,  # TF uses 0.0 here too
                     constraints={
                         # "pop": p_mean(proof_of_performance, -2.0),  # TF uses -1.0
                         # "exp_decrease": p_mean(exp_decrease_fulfillment, -2.0),  # TF uses -1.0
                         "decrease_satisfaction": p_mean(decrease_satisfaction, -6.0),  # TF uses -1.0
-                        "v_dot": p_mean(v_dot_fulfillment, -6.0),
+                        "v_dot": p_mean(v_dot_fulfillment, -2.0),
                         # "deriv_viol": p_mean(deriv_viol, -6.0) if deriv_viol is not None else V_initial.new_tensor(1.0),
                     },
                 ),

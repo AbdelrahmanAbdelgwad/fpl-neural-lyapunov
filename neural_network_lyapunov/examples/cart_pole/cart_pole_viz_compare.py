@@ -15,17 +15,8 @@ import neural_network_lyapunov.relu_system as relu_system
 
 def load_dynamics_model(dir_path, dt=0.01):
     """Load the ML dynamics model used for training."""
-    # dynamics_model_path = dir_path + "/data/preprocess/cart_pole_forward_model_3d.pt"
-    # dynamics_model = torch.load(dynamics_model_path, weights_only=False)
-    dynamics_model_path = dir_path + "/data/preprocess/cart_pole_forward_model.pt"
-    dynamics_model_data = torch.load(dynamics_model_path, map_location='cpu')
-    dynamics_relu = utils.setup_relu(
-    dynamics_model_data["linear_layer_width"],
-    params=None,
-    negative_slope=dynamics_model_data["negative_slope"],
-    bias=dynamics_model_data["bias"],
-    dtype=torch.float64)
-    dynamics_relu.load_state_dict(dynamics_model_data["state_dict"])
+    dynamics_model_path = dir_path + "/data/preprocess/cart_pole_forward_model_3d.pt"
+    dynamics_model = torch.load(dynamics_model_path, weights_only=False, map_location='cpu')
 
     # Create forward system wrapper
     q_equilibrium = torch.tensor([0.0, 0.0], dtype=torch.float64)
@@ -121,7 +112,7 @@ def simulate_trajectory_analytical_fast(plant, controller_relu, x_equilibrium, u
     if check_convergence:
         # Use event detection for early termination
         def convergence_event(t, x):
-            return np.sqrt(x[0]**2 + x[1]**2 + x[2]**2 + x[3]**2) - 0.05
+            return np.sqrt(x[0]**2 + x[1]**2 + x[2]**2 + x[3]**2) - 1e-3
         convergence_event.terminal = True
         convergence_event.direction = -1
         
@@ -145,22 +136,48 @@ def simulate_trajectory_analytical_fast(plant, controller_relu, x_equilibrium, u
         
         return result.t, result.y, controls
 
-def simulate_trajectory_ml_fast(forward_system, controller_relu, x_equilibrium, u_equilibrium,
-                                u_lo, u_up, x0, T=10.0, dt=0.01, check_convergence=False):
-    """Fast ML simulation with optional convergence checking."""
+def simulate_trajectory_ml_fast(dynamics_model, controller_relu, x_equilibrium, u_equilibrium,
+                                  u_lo, u_up, x0, T=10.0, dt=0.01, check_convergence=False):
+    """Direct ML simulation using the raw dynamics model like teleop does."""
     num_steps = int(T / dt)
+    
+    # Get equilibrium accelerations for centering
+    with torch.no_grad():
+        # Model expects [theta, theta_dot, u] with batch dimension
+        x_eq_input = torch.tensor([[x_equilibrium[1].item(), x_equilibrium[3].item(), u_equilibrium.item()]], 
+                                  dtype=torch.float64)
+        accel_eq = dynamics_model(x_eq_input).squeeze(0).reshape(-1)
     
     if check_convergence:
         x_curr = torch.tensor(x0, dtype=torch.float64)
         with torch.no_grad():
-            for _ in range(num_steps):
+            for step in range(num_steps):
+                # Get control
                 u_pre_sat = controller_relu(x_curr) - controller_relu(x_equilibrium) + u_equilibrium
                 u_sat = torch.max(torch.min(u_pre_sat, u_up), u_lo)
-                x_curr = forward_system.step_forward(x_curr, u_sat)
                 
+                # Model expects [theta, theta_dot, u] with batch dimension
+                model_input = torch.tensor([[x_curr[1].item(), x_curr[3].item(), u_sat.item()]], 
+                                          dtype=torch.float64)
+                accel = dynamics_model(model_input).squeeze(0).reshape(-1) - accel_eq
+                
+                # Compute v_next using residue dynamics
+                # v[n+1] = v[n] + accel * dt
+                v_curr = x_curr[2:]  # [x_dot, theta_dot]
+                v_next = v_curr + accel * dt
+                
+                # Compute q_next using midpoint rule (matching ReLUSecondOrderResidueSystemGivenEquilibrium)
+                # q[n+1] = q[n] + (v[n] + v[n+1]) * dt / 2
+                q_curr = x_curr[:2]  # [x, theta]
+                q_next = q_curr + (v_curr + v_next) * dt / 2
+                
+                # Combine into next state
+                x_curr = torch.cat([q_next, v_next])
+                
+                # Check convergence
                 error = torch.sqrt((x_curr**2).sum())
-                if error < 0.05:
-                    return True, _ * dt
+                if error < 1e-3:
+                    return True, step * dt
         return False, T
     else:
         t = np.arange(0, T, dt)
@@ -171,16 +188,33 @@ def simulate_trajectory_ml_fast(forward_system, controller_relu, x_equilibrium, 
         with torch.no_grad():
             for i in range(num_steps - 1):
                 x_curr = torch.tensor(x[:, i], dtype=torch.float64)
+                
+                # Get control
                 u_pre_sat = controller_relu(x_curr) - controller_relu(x_equilibrium) + u_equilibrium
                 u_sat = torch.max(torch.min(u_pre_sat, u_up), u_lo)
                 u[i] = u_sat.item()
-                x_next = forward_system.step_forward(x_curr, u_sat)
-                x[:, i+1] = x_next.numpy()
+                
+                # Model expects [theta, theta_dot, u] with batch dimension
+                model_input = torch.tensor([[x_curr[1].item(), x_curr[3].item(), u_sat.item()]], 
+                                          dtype=torch.float64)
+                accel = dynamics_model(model_input).squeeze(0).reshape(-1) - accel_eq
+                
+                # Compute v_next using residue dynamics
+                v_curr = x_curr[2:]  # [x_dot, theta_dot]
+                v_next = v_curr + accel * dt
+                
+                # Compute q_next using midpoint rule
+                q_curr = x_curr[:2]  # [x, theta]
+                q_next = q_curr + (v_curr + v_next) * dt / 2
+                
+                # Store next state
+                x[:2, i+1] = q_next.numpy()
+                x[2:, i+1] = v_next.numpy()
         
         return t, x, u
 
 def compute_convergence_regions_vectorized(configurations, n_samples, x_lo, x_up,
-                                          plant, forward_system, x_equilibrium, 
+                                          plant, dynamics_model, x_equilibrium, 
                                           u_equilibrium, u_lo, u_up):
     """Compute convergence regions using vectorized operations where possible."""
     results = {}
@@ -221,7 +255,7 @@ def compute_convergence_regions_vectorized(configurations, n_samples, x_lo, x_up
                         converged[i] = conv
                     else:
                         conv, _ = simulate_trajectory_ml_fast(
-                            forward_system, controller, x_equilibrium, u_equilibrium,
+                            dynamics_model, controller, x_equilibrium, u_equilibrium,
                             u_lo, u_up, x0, T=100.0, dt=0.01, check_convergence=True
                         )
                         converged[i] = conv
@@ -414,7 +448,7 @@ def create_full_comparison_plots_optimized(bound_level=3, V_lambda=0.6):
     ) / 100.0
     
     # Number of samples
-    n_samples = 100  # Fixed for consistency
+    n_samples = 500  # Fixed for consistency
 
     configurations = [
         (controller_std, 'Analytical', 'Std-Analytical'),
@@ -426,7 +460,7 @@ def create_full_comparison_plots_optimized(bound_level=3, V_lambda=0.6):
     # Compute convergence regions
     results = compute_convergence_regions_vectorized(
         configurations, n_samples, x_lo_test, x_up_test,
-        plant, forward_system, x_equilibrium, 
+        plant, dynamics_model, x_equilibrium, 
         u_equilibrium, u_lo, u_up
     )
     
@@ -481,6 +515,8 @@ def create_full_comparison_plots_optimized(bound_level=3, V_lambda=0.6):
     
     plt.tight_layout()
     return fig
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Visualize and compare cart-pole controllers')

@@ -465,6 +465,7 @@ def main():
 
     mode_compare = args.compare  # True: draw both; False: drive network only
     running = True
+    steps_count = 0
 
     while running:
         # ------------- Events -------------
@@ -519,6 +520,7 @@ def main():
 
         # ------------- Control -------------
         u = ctrl.compute_u(q_truth)  # apply the same u to both branches
+        steps_count += 1
 
         # ------------- Step -------------
         # Analytic
@@ -622,8 +624,19 @@ def main():
 
         pygame.display.flip()
         clock.tick(int(1.0 / args.dt))
+        print(f"Sim Time {steps_count*args.dt:.2f}s", end="\r")
+
+        # check for convergence of net model to zero error
+        if np.linalg.norm(q_net) < 1e-3:
+            print(
+                f"Converged to ‖Δq‖={err:.3e} at step {steps_count}, time={steps_count*args.dt:.1f}s"
+            )
+            running = False
+
+
 
     pygame.quit()
+    print(f"Exited with steps={steps_count}, time={steps_count*args.dt:.1f}s")
 
 
 if __name__ == "__main__":

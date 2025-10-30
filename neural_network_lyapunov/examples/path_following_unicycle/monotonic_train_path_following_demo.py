@@ -22,7 +22,7 @@ import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_bar
 # import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
 import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
 
-from neural_network_lyapunov.examples.path_following_unicycle.preprocess.fpl import *
+from neural_network_lyapunov.examples.path_following_unicycle.preprocess.fpl_unicycle import *
 
 
 def rotation_matrix(theta):
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pretrain_num_epochs",
         type=int,
-        default=400,
+        default=150,
         help="number of epochs in pre-training on samples.",
     )
     parser.add_argument(
@@ -556,6 +556,8 @@ if __name__ == "__main__":
             V_lambda,
             closed_loop_system.x_equilibrium,
             R_options,
+            x_lo,
+            x_up,
         )
 
         # Train with FPL
@@ -605,5 +607,8 @@ if __name__ == "__main__":
         dut.lyapunov_positivity_mip_cost_weight = None
         # dut.boundary_value_gap_mip_cost_weight = 0.0
         # dut.lyapunov_upper = 1.#1.#None
+        dut.patience = 1e6
+        dut.no_improve_count = 0
+        dut.best_violation = float('inf')
         dut.train(torch.empty((0, 2), dtype=torch.float64))
     pass

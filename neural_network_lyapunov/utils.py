@@ -1337,7 +1337,8 @@ def train_approximator(
     @param output_fun_args A dictionnary of additional arguments to pass to
     output_fun
     """
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
     model = model.to(device)
     print("torch training device: ", device)
     print("training model device: ", next(model.parameters()).device)

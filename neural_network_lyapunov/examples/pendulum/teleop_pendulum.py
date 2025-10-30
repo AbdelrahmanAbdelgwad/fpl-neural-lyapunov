@@ -1,36 +1,6 @@
-# teleop_pendulum.py
+# teleop_pendulum.py - FIXED VERSION
 # Keyboard teleop / visualizer for PENDULUM dynamics with animation.
 # State: x = [theta, thetadot]; Control: u = [torque]
-# Analytic dynamics:
-#   d/dt theta    = thetadot
-#   d/dt thetadot = (u - mgl*sin(theta) - b*thetadot) / (ml^2)
-#
-# Features:
-# - Dual visualization: pendulum animation + phase portrait
-# - Keyboard control or custom controller function
-# - Compare analytic vs learned forward model
-#
-# Controls:
-#   A / D : decrease / increase torque (keyboard mode)
-#   X     : zero torque
-#   R     : reset state to --init
-#   M     : toggle compare mode (draw analytic trace too)
-#   V     : toggle view (pendulum/phase/both)
-#   C     : toggle clamping to bounds
-#   T / G : shorten / lengthen trace
-#   ESC   : quit
-#
-# Example:
-#   # Keyboard control
-#   python teleop_pendulum.py --dt 0.02
-#
-#   # With learned model
-#   python teleop_pendulum.py --model path/to/model.pt --compare
-#
-#   # With LQR controller
-#   python teleop_pendulum.py --controller lqr --lqr-Q 10,1 --lqr-R 1
-#
-# Requirements: pygame, torch, numpy, scipy
 
 import argparse
 import math
@@ -44,6 +14,7 @@ import torch
 import torch.nn as nn
 
 import neural_network_lyapunov.utils as utils
+from neural_network_lyapunov.examples.pendulum.pendulum import Pendulum
 
 
 def wrap_angle(th: float) -> float:
@@ -158,15 +129,14 @@ class ForwardModelPendulum:
 
             if phi_out.ndim == 0:  # ensure shape [1]
                 phi_out = phi_out.view(1)
+            # In teleop_pendulum.py, ForwardModelPendulum.step()
             if phi_out.shape[0] == 1:
                 val = (phi_out[0] - self.phi_eq[1]).item()
-                if self.output_mode == "thetaddot":
-                    # xdot = [thetadot, thetaddot]; Euler integrate
-                    theta_next = wrap_angle(x[0] + x[1] * self.dt)
-                    v_next = x[1] + val * self.dt
-                    x_next_pred = torch.tensor(
-                        [theta_next, v_next], dtype=torch.float64
-                    )
+                if self.output_mode == "vnext":  # Default mode
+                    v_next = val
+                    # Use trapezoidal integration to match training!
+                    theta_next = wrap_angle(x[0] + (x[1] + v_next) * self.dt / 2)
+                    x_next_pred = torch.tensor([theta_next, v_next], dtype=torch.float64)
                 else:  # "vnext": model predicts thetadot_{n+1}
                     v_next = val
                     theta_next = wrap_angle(x[0] + v_next * self.dt)
@@ -184,58 +154,17 @@ class ForwardModelPendulum:
         return x_next
 
 
-# Controllers
-def create_lqr_controller(
-    Q: np.ndarray,
-    R: np.ndarray,
-    mass: float,
-    gravity: float,
-    length: float,
-    damping: float,
-) -> Callable:
-    """Create an LQR controller around upright equilibrium (π, 0)."""
-    # Linearize around (π, 0)
-    A = np.array([[0, 1], [gravity / length, -damping / (mass * length * length)]])
-    B = np.array([[0], [1 / (mass * length * length)]])
-
-    # Solve Riccati equation
-    S = scipy.linalg.solve_continuous_are(A, B, Q, R)
-    K = -np.linalg.solve(R, B.T @ S)
-
-    def controller(x: np.ndarray) -> float:
-        # Control around upright
-        x_err = np.array([wrap_angle(x[0] - math.pi), x[1]])
-        u = float(K @ x_err)
+def create_lqr_controller(plant: Pendulum, Q: np.ndarray, R: np.ndarray,
+                           x_eq: np.ndarray, u_eq: np.ndarray):
+    K, S = plant.lqr_control(Q, R, x_eq)
+    
+    def ufun(x: np.ndarray) -> float:
+        x_err = x - x_eq
+        # Wrap angle error to [-pi, pi]
+        x_err[0] = wrap_angle(x_err[0])
+        u = float(u_eq + K @ x_err)
         return u
-
-    return controller
-
-
-def create_energy_controller(
-    gain: float, mass: float, gravity: float, length: float
-) -> Callable:
-    """Create an energy-shaping swing-up controller."""
-
-    def controller(x: np.ndarray) -> float:
-        theta, thetadot = x[0], x[1]
-
-        # Desired energy (upright position)
-        E_des = mass * gravity * length  # PE at top, KE = 0
-
-        # Current energy
-        ke = 0.5 * mass * (length * thetadot) ** 2
-        pe = -mass * gravity * length * math.cos(theta)
-        E = ke + pe
-
-        # Energy-based control
-        if abs(thetadot) < 0.01:
-            u = -gain * (E - E_des)
-        else:
-            u = -gain * thetadot * (E - E_des)
-
-        return float(u)
-
-    return controller
+    return ufun, K, S
 
 
 def create_pid_controller(
@@ -262,14 +191,20 @@ def create_pid_controller(
 def create_monotonic_controller(model, x_eq=(math.pi, 0.0), u_eq=0.0) -> Callable:
     """Monotonic NN controller centered at equilibrium: u = φ(x) - φ(x*) + u*."""
     with torch.no_grad():
-        xeq_t = torch.tensor(x_eq, dtype=torch.double).unsqueeze(0)
-        phi_eq = model(xeq_t).squeeze()
+        xeq_t = torch.tensor(x_eq, dtype=torch.float64)
+        phi_eq = model(xeq_t)
+        if phi_eq.ndim == 0:
+            phi_eq = phi_eq.view(1)
+        phi_eq = phi_eq.squeeze()
 
     def controller(x: np.ndarray) -> float:
         with torch.no_grad():
-            xin = torch.tensor(x, dtype=torch.double).unsqueeze(0)
-            u_pre = model(xin).squeeze() - phi_eq + u_eq
-            return float(u_pre)
+            xin = torch.tensor(x, dtype=torch.float64)
+            u_pre = model(xin)
+            if u_pre.ndim == 0:
+                u_pre = u_pre.view(1)
+            u = u_pre.squeeze() - phi_eq + u_eq
+            return float(u)
 
     return controller
 
@@ -380,12 +315,13 @@ def main():
         choices=["xnext", "vnext", "thetaddot"],
         help="What a 1-D model predicts.",
     )
+    # FIX: Default to near upright position for LQR
     parser.add_argument(
         "--init",
         type=float,
         nargs=2,
-        default=[0.5, 0.0],
-        help="Initial [theta, thetadot].",
+        default=[3.0, 0.0],  # Changed from [0.5, 0.0]
+        help="Initial [theta, thetadot]. Default near upright for LQR.",
     )
 
     # Pendulum parameters
@@ -402,32 +338,30 @@ def main():
     parser.add_argument(
         "--controller",
         type=str,
-        default="NN",
-        choices=["keyboard", "lqr", "energy", "pid", "zero", "NN"],
+        default="keyboard",  # Changed default from NN
+        choices=["keyboard", "lqr", "pid", "zero", "NN"],
         help="Controller type.",
     )
     parser.add_argument(
         "--controller-model",
         type=str,
         default="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10/monotonic_bound10_controller.pt",
-        help="Path to torch model (φ: [theta, thetadot, u]->x_next).",
+        help="Path to NN controller model.",
     )
     parser.add_argument("--umax", type=float, default=20.0, help="Max |torque| (N⋅m).")
     parser.add_argument(
         "--du", type=float, default=0.5, help="Torque increment (keyboard)."
     )
 
-    # Controller-specific parameters
+    # Controller-specific parameters - FIX: Match monotonic_train
     parser.add_argument(
         "--lqr-Q",
         type=str,
-        default="10,1",
+        default="100,1",  # Changed from "10,1" to match monotonic_train
         help="LQR Q matrix diagonal (comma-separated).",
     )
     parser.add_argument("--lqr-R", type=float, default=1.0, help="LQR R value.")
-    parser.add_argument(
-        "--energy-gain", type=float, default=2.0, help="Energy controller gain."
-    )
+
     parser.add_argument("--pid-kp", type=float, default=10.0, help="PID P gain.")
     parser.add_argument("--pid-ki", type=float, default=0.1, help="PID I gain.")
     parser.add_argument("--pid-kd", type=float, default=2.0, help="PID D gain.")
@@ -456,8 +390,13 @@ def main():
     parser.add_argument(
         "--u-eq", type=float, default=0.0, help="Equilibrium control for model."
     )
+    
+
 
     args = parser.parse_args()
+
+    # Create plant instance
+    plant = Pendulum(torch.float64)
 
     # Create controller
     controller = None
@@ -465,48 +404,41 @@ def main():
         Q_diag = [float(x) for x in args.lqr_Q.split(",")]
         Q = np.diag(Q_diag)
         R = np.array([[args.lqr_R]])
-        controller = create_lqr_controller(
-            Q, R, args.mass, args.gravity, args.length, args.damping
+        controller, K, _ = create_lqr_controller(
+            plant, Q, R, np.array(args.x_eq), np.array([args.u_eq])
         )
-    elif args.controller == "energy":
-        controller = create_energy_controller(
-            args.energy_gain, args.mass, args.gravity, args.length
-        )
+        print(f"K matrix: {K}")
+        print(f"For upright (π,0), K should be approximately [[-31.6, -7.4]] for Q=diag([10,1]), R=1")
+        
+
     elif args.controller == "pid":
         controller = create_pid_controller(args.pid_kp, args.pid_ki, args.pid_kd)
     elif args.controller == "zero":
         controller = lambda x: 0.0
-
     elif args.controller == "NN":
-        # "neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_controller.pt"
-        # "neural_network_lyapunov/examples/pendulum/data/pendulum_controller4.pt"
-        # "neural_network_lyapunov/examples/examples_in_paper/pendulum/controller19.pt"
         controller_path = args.controller_model
         try:
-
-            controller_relu = torch.load(controller_path)
-            controller = create_monotonic_controller(controller_relu)
-            # test out the model on dummy input
-            with torch.no_grad():
-                dummy_input = torch.zeros(1, 2)
-                dummy_output = controller(dummy_input)
-                print("Dummy output:", dummy_output)
+            # FIX: Try loading as full model first
+            controller_model = torch.load(controller_path)
+            controller = create_monotonic_controller(controller_model)
+            print("Loaded NN controller as full model")
         except:
-            dynamics_controller_data = torch.load(controller_path)
-            controller = utils.setup_relu(
-                dynamics_controller_data["linear_layer_width"],
-                params=None,
-                negative_slope=dynamics_controller_data["negative_slope"],
-                bias=True,
-                dtype=torch.float64,
-            )
-            controller.load_state_dict(dynamics_controller_data["state_dict"])
-            controller = create_monotonic_controller(controller)
-            # test out the model on dummy input
-            with torch.no_grad():
-                dummy_input = torch.zeros(1, 2)
-                dummy_output = controller(dummy_input)
-                print("Dummy output:", dummy_output)
+            # FIX: Fallback to loading as state dict
+            try:
+                controller_data = torch.load(controller_path)
+                controller_model = utils.setup_relu(
+                    controller_data["linear_layer_width"],
+                    params=None,
+                    negative_slope=controller_data["negative_slope"],
+                    bias=True,
+                    dtype=torch.float64,
+                )
+                controller_model.load_state_dict(controller_data["state_dict"])
+                controller = create_monotonic_controller(controller_model)
+                print("Loaded NN controller from state dict")
+            except Exception as e:
+                print(f"Failed to load NN controller: {e}")
+                controller = lambda x: 0.0
 
     pygame.init()
     clock = pygame.time.Clock()
@@ -516,16 +448,18 @@ def main():
 
     font = pygame.font.SysFont("consolas", 16)
 
-    # Control (torque)
-    u = 0.0
+    # Control (torque) - separate for each model when using controllers
+    u = 0.0  # For keyboard control
+    u_truth = 0.0  # Control for analytical model
+    u_net = 0.0    # Control for network model
 
     # States
     x_truth = np.array(args.init, dtype=float)
     x_net = np.array(args.init, dtype=float)
 
     # Bounds
-    x_lo = np.array([0, -5.0], dtype=float)
-    x_hi = np.array([+2 * math.pi, +5.0], dtype=float)
+    x_lo = np.array([0, -10.0], dtype=float)
+    x_hi = np.array([+2 * math.pi, +10.0], dtype=float)
 
     # Model
     model = ForwardModelPendulum(
@@ -544,7 +478,7 @@ def main():
     view_mode = args.view
     mode_compare = args.compare
     running = True
-
+    steps_count = 0
     while running:
         # Events
         for event in pygame.event.get():
@@ -563,11 +497,16 @@ def main():
                 u = min(args.umax, u + args.du)
             if keys[pygame.K_x]:
                 u = 0.0
+            # For keyboard, use same control for both models
+            u_truth = u
+            u_net = u
         else:
-            # Use controller
-            # u = controller(x_truth)
-            u = controller(x_net)
-            u = np.clip(u, -args.umax, args.umax)
+            # Each model uses its own state for control
+            u_truth = controller(x_truth)
+            u_truth = np.clip(u_truth, -args.umax, args.umax)
+            
+            u_net = controller(x_net)
+            u_net = np.clip(u_net, -args.umax, args.umax)
 
         if keys[pygame.K_r]:
             x_truth[:] = args.init
@@ -591,15 +530,13 @@ def main():
             trace_len = min(4000, trace_len + 200)
             pygame.time.wait(150)
 
-        # Step dynamics
-        x_truth_next = euler_step_pendulum(
-            x_truth, u, args.mass, args.gravity, args.length, args.damping, args.dt
-        )
+        # Step dynamics (each model uses its own control)
+        x_truth_next = plant.next_pose(x_truth, np.array([u_truth]), args.dt)
+        x_truth_next[0] = wrap_angle(x_truth_next[0])  # wrap for visualization if needed
 
-        try:
-            x_net_next = model.step(x_net, u)
-        except Exception:
-            x_net_next = x_net.copy()
+        x_net_next = model.step(x_net, u_net)
+
+        steps_count += 1
 
         if args.clamp_bounds:
             x_truth_next = clamp_state(x_truth_next, x_lo, x_hi)
@@ -689,9 +626,18 @@ def main():
         energy = ke + pe
 
         err = float(np.linalg.norm(x_net - x_truth)) if mode_compare else 0.0
+        
+        # Show control values
+        if args.controller == "keyboard":
+            control_str = f"u={u:+.3f} N⋅m"
+        else:
+            if mode_compare:
+                control_str = f"u_truth={u_truth:+.3f}, u_net={u_net:+.3f} N⋅m"
+            else:
+                control_str = f"u={u_net:+.3f} N⋅m"
 
         lines = [
-            f"Controller: {args.controller}   u={u:+.3f} N⋅m   Energy={energy:.2f} J",
+            f"Controller: {args.controller}   {control_str}   Energy={energy:.2f} J",
             f"Mode: {'COMPARE' if mode_compare else 'NETWORK'}   View: {view_mode}   Clamp: {'ON' if args.clamp_bounds else 'OFF'}",
             f"x_truth=(θ={x_truth[0]:+.3f}, θ̇={x_truth[1]:+.3f})",
             f"x_net  =(θ={x_net[0]:+.3f}, θ̇={x_net[1]:+.3f})"
@@ -708,8 +654,18 @@ def main():
 
         pygame.display.flip()
         clock.tick(int(1.0 / args.dt))
+        # exit if converged to upright
+        if abs(wrap_angle(x_net[0] - math.pi)) < 1e-3 and abs(x_net[1]) < 1e-3:
+            print("\nConverged to upright position.")
+            running = False
+        # print the step and time of the simulation and I do not want a new line each time
+        print(f"Step {steps_count}, Sim Time: {steps_count * args.dt:.2f} s", end="\r")
+
+
 
     pygame.quit()
+    print()  # New line after the last print
+    print(f"Exited after {steps_count} steps.")
 
 
 if __name__ == "__main__":

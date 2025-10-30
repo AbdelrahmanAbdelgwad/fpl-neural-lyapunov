@@ -13,15 +13,17 @@ pip install gurobipy  # Missing dependency
 python setup.py
 source ./config/setup_environments.sh
 
-# Stay in current directory instead of wrong path
-# cd /home/zw2445/Documents/neural-network-lyapunov  # Remove this line
-
 # Start timer
 SECONDS=0
 
 python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
     --bound_level=40 \
     --use_fpl \
+    --pretrain_num_epochs=80 \
+    --batch_size=512 \
+    --learning_rate=1e-2 \
+    --search_R \
+    # --max_iterations=500 \
 
 # Stop timer and report
 duration=$SECONDS

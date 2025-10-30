@@ -27,7 +27,9 @@ for i in {1..40}; do
     # else
     python neural_network_lyapunov/examples/path_following_unicycle/monotonic_train_path_following_demo.py \
         --bound_level=$i \
-        --bound_level_last=$(($i-1))
+        --bound_level_last=$(($i-1)) \
+        --search_R \
+        
     # fi
 done
 

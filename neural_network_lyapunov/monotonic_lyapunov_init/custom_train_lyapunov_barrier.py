@@ -163,6 +163,7 @@ class Trainer:
         # this strengthening might be computational expensive (it could
         # require solving some MIPs).
         self.derivative_mip_strengthen_binary = False
+        
 
     def add_lyapunov(
         self,
