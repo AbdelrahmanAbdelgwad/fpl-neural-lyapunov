@@ -1,12 +1,11 @@
 # Ignore all folders named 'data'
-**/data_report
+**/data/
 
 # Ignore all folders named 'data'
 **/visualizations/plot*/
 
 # Ignore all PyTorch model files
 # *.pt
-**/*dataset.pt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -141,7 +140,7 @@ dmypy.json
 gurobi.log
 
 # Pytorch tensors
-# *.pt
+*.pt
 
 # trained model used in tests
 !*/test/data/*.pt
@@ -155,3 +154,13 @@ notebooks/*.p
 *wandb
 
 lyapunov_venv/
+visualization_results/
+viz_compare
+
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+*.svg
+

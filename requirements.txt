@@ -1,6 +1,9 @@
-pytorch >= 1.8
+torch >= 1.8
 numpy >= 1.18
 scipy >= 1.4
 tensorboard >= 2.3
 pybullet
 cvxpy >= 1.1
+matplotlib >= 3.2
+wandb >= 0.21.0
+torch-optimizer

@@ -8,9 +8,14 @@ import neural_network_lyapunov.r_options as r_options
 # import neural_network_lyapunov.monotonic_lyapunov.custom_lyapunov as lyapunov
 # import neural_network_lyapunov.monotonic_lyapunov.custom_train_lyapunov_barrier as train_lyapunov_barrier
 # import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils as monotonic_utils
+# import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
+# import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
+# import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
+
 import neural_network_lyapunov.monotonic_lyapunov_init.custom_lyapunov as lyapunov
 import neural_network_lyapunov.monotonic_lyapunov_init.custom_train_lyapunov_barrier as train_lyapunov_barrier
-import neural_network_lyapunov.monotonic_lyapunov_init.monotonic_utils as monotonic_utils
+import neural_network_lyapunov.monotonic_lyapunov.monotonic_utils_0615 as monotonic_utils
+
 import torch
 import scipy.integrate
 import numpy as np
@@ -288,9 +293,9 @@ if __name__ == "__main__":
     print("bound level is: ", bound_level)
     if args.bound_level_last>=1:
         bound_level_last = args.bound_level_last#bound_level-1
-        args.load_controller_relu=dir_path+"/data/monotonic/monotonic_bound"+str(bound_level_last)+"_controller.pt"
-        args.load_lyapunov_relu=dir_path+"/data/monotonic/monotonic_bound"+str(bound_level_last)+"_lyapunov.pt"
-        args.load_lyapunov_R=dir_path+"/data/monotonic/monotonic_bound"+str(bound_level_last)+"_R.pt"
+        args.load_controller_relu=dir_path+"/data/monotonic_bound"+str(bound_level_last)+"/monotonic_bound"+str(bound_level_last)+"_controller.pt"
+        args.load_lyapunov_relu=dir_path+"/data/monotonic_bound"+str(bound_level_last)+"/monotonic_bound"+str(bound_level_last)+"_lyapunov.pt"
+        args.load_lyapunov_R=dir_path+"/data/monotonic_bound"+str(bound_level_last)+"/monotonic_bound"+str(bound_level_last)+"_R.pt"
         print("pre-trained bound level is: ", bound_level_last)
     print("pretrained lyapunov path: ",args.load_lyapunov_relu)
     x_lo = torch.tensor([-0.03*bound_level,-0.03*bound_level,-0.04*bound_level], dtype=torch.float64)
@@ -321,7 +326,7 @@ if __name__ == "__main__":
                             dynamics_dataset,
                             num_epochs=100)
     else:#if args.load_forward_model:
-        dynamics_model_path = dir_path + "/data/preprocess/third_order_forward_model.pt"
+        dynamics_model_path = dir_path + "/data/preprocess/third_order_forward_model2.pt"
         # dynamics_relu = utils.setup_relu(
         #     dynamics_model_data["linear_layer_width"],
         #     params=None,
@@ -380,8 +385,8 @@ if __name__ == "__main__":
     u_equilibrium = torch.tensor([0.], dtype=torch.float64)
     # x_lo = torch.tensor([np.pi - 0.1 * np.pi, -0.5], dtype=torch.float64)
     # x_up = torch.tensor([np.pi + 0.1 * np.pi, 0.5], dtype=torch.float64)
-    u_lo = torch.tensor([-10.], dtype=torch.float64)
-    u_up = torch.tensor([10.], dtype=torch.float64)
+    u_lo = torch.tensor([-30.], dtype=torch.float64)
+    u_up = torch.tensor([30.], dtype=torch.float64)
     
     R = torch.from_numpy(S) + 0.01 * torch.eye(3, dtype=dtype)
     
@@ -461,7 +466,7 @@ if __name__ == "__main__":
                                       num_epochs=args.pretrain_num_epochs,
                                       batch_size=50)
     dut.enable_wandb = args.enable_wandb
-    dut.save_network_path = dir_path + "/data/monotonic/monotonic_bound" + str(bound_level) + "_"
+    dut.save_network_path = dir_path + "/data/monotonic_bound" + str(bound_level)
     if args.train_adversarial:
         dut.save_network_path += "adversarial_"
         options = train_lyapunov_barrier.Trainer.AdversarialTrainingOptions()
@@ -479,9 +484,12 @@ if __name__ == "__main__":
         result = dut.train_adversarial(positivity_state_samples_init,
                                        derivative_state_samples_init, options)
     else:
-        # dut.learning_rate = 0.0005
+        # dut.learning_rate = 0.007
         dut.lyapunov_positivity_mip_cost_weight = 0.
         # dut.boundary_value_gap_mip_cost_weight = 0.0
         # dut.lyapunov_upper = 1.#1.#None
+        dut.patience = 1e6
+        dut.no_improve_count = 0
+        dut.best_violation = float('inf')
         dut.train(torch.empty((0, 3), dtype=torch.float64))
     pass

@@ -24,14 +24,18 @@ class Pendulum:
         theta = x[0]
         thetadot = x[1]
         if isinstance(x, np.ndarray):
-            thetaddot = (u[0] - self.mass * self.gravity * self.length *
-                         np.sin(theta) - self.damping * thetadot) /\
-                (self.mass * self.length * self.length)
+            thetaddot = (
+                u[0]
+                - self.mass * self.gravity * self.length * np.sin(theta)
+                - self.damping * thetadot
+            ) / (self.mass * self.length * self.length)
             return np.array([thetadot, thetaddot])
         elif isinstance(x, torch.Tensor):
-            thetaddot = (u[0] - self.mass * self.gravity * self.length *
-                         torch.sin(theta) - self.damping * thetadot) /\
-                (self.mass * self.length * self.length)
+            thetaddot = (
+                u[0]
+                - self.mass * self.gravity * self.length * torch.sin(theta)
+                - self.damping * thetadot
+            ) / (self.mass * self.length * self.length)
             return torch.cat((thetadot.view(1), thetaddot.view(1)))
 
     def potential_energy(self, x):
@@ -65,17 +69,31 @@ class Pendulum:
         Returns the gradient of the dynamics
         """
         A = torch.tensor(
-            [[0, 1],
-             [
-                 -self.gravity / self.length * torch.cos(x[0]), -self.damping /
-                 (self.mass * self.length * self.length)
-             ]],
-            dtype=self.dtype)
-        B = torch.tensor([[0], [1 / (self.mass * self.length * self.length)]],
-                         dtype=self.dtype)
+            [
+                [0, 1],
+                [
+                    -self.gravity / self.length * torch.cos(x[0]),
+                    -self.damping / (self.mass * self.length * self.length),
+                ],
+            ],
+            dtype=self.dtype,
+        )
+        B = torch.tensor(
+            [[0], [1 / (self.mass * self.length * self.length)]], dtype=self.dtype
+        )
         return A, B
+    
+    def next_pose(self, x, u, dt):
+        """
+        Computes the next pose of the pendulum after dt.
+        """
+        x_np = x.detach().numpy() if isinstance(x, torch.Tensor) else x
+        u_np = u.detach().numpy() if isinstance(u, torch.Tensor) else u
+        result = scipy.integrate.solve_ivp(
+            lambda t, x_val: self.dynamics(x_val, u_np), [0, dt], x_np)
+        return result.y[:, -1]
 
-    def lqr_control(self, Q, R):
+    def lqr_control(self, Q, R, x_des):
         """
         lqr control around the equilibrium (pi, 0).
         returns the controller gain K
@@ -84,10 +102,10 @@ class Pendulum:
         # First linearize the dynamics
         # The dynamics is
         # thetaddot = (u - mgl * sin(theta) - b*thetadot) / (ml^2)
-        A, B = self.dynamics_gradient(
-            torch.tensor([np.pi, 0], dtype=self.dtype))
-        S = scipy.linalg.solve_continuous_are(A.detach().numpy(),
-                                              B.detach().numpy(), Q, R)
+        A, B = self.dynamics_gradient(torch.tensor([x_des[0], x_des[1]], dtype=self.dtype))
+        S = scipy.linalg.solve_continuous_are(
+            A.detach().numpy(), B.detach().numpy(), Q, R
+        )
         K = -np.linalg.solve(R, B.T @ S)
         return K, S
 
@@ -104,14 +122,14 @@ class PendulumVisualizer:
         self._pendulum_ax = self._fig.add_subplot(subplot)
         theta0 = x0[0]
         l_ = self._plant.length
-        self._pendulum_arm, = self._pendulum_ax.plot(
+        (self._pendulum_arm,) = self._pendulum_ax.plot(
             np.array([0, l_ * np.sin(theta0)]),
             np.array([0, -l_ * np.cos(theta0)]),
-            linewidth=5)
-        self._pendulum_sphere, = self._pendulum_ax.plot(l_ * np.sin(theta0),
-                                                        -l_ * np.cos(theta0),
-                                                        marker='o',
-                                                        markersize=15)
+            linewidth=5,
+        )
+        (self._pendulum_sphere,) = self._pendulum_ax.plot(
+            l_ * np.sin(theta0), -l_ * np.cos(theta0), marker="o", markersize=15
+        )
         self._pendulum_ax.set_xlim(-l_ * 1.1, l_ * 1.1)
         self._pendulum_ax.set_ylim(-1.1 * l_, 1.1 * l_)
         self._pendulum_ax.set_axis_off()
@@ -134,27 +152,28 @@ class PendulumReluContinuousTime:
     """
     The dynamics is theta_ddot = phi(theta, theta_dot, u) - phi(0, 0, 0)
     """
+
     def __init__(self, dtype, x_lo, x_up, u_lo, u_up, dynamics_relu):
         self.x_dim = 2
         self.dtype = dtype
-        assert (x_lo.shape == (self.x_dim, ))
-        assert (x_up.shape == (self.x_dim, ))
+        assert x_lo.shape == (self.x_dim,)
+        assert x_up.shape == (self.x_dim,)
         self.x_lo = x_lo
         self.x_up = x_up
         self.u_dim = 1
-        assert (u_lo.shape == (self.u_dim, ))
-        assert (u_up.shape == (self.u_dim, ))
+        assert u_lo.shape == (self.u_dim,)
+        assert u_up.shape == (self.u_dim,)
         self.u_lo = u_lo
         self.u_up = u_up
-        assert (dynamics_relu[0].in_features == 3)
-        assert (dynamics_relu[-1].out_features == 1)
+        assert dynamics_relu[0].in_features == 3
+        assert dynamics_relu[-1].out_features == 1
         self.dynamics_relu = dynamics_relu
         self.x_equilibrium = torch.tensor([np.pi, 0], dtype=self.dtype)
         self.u_equilibrium = torch.tensor([0], dtype=self.dtype)
         self.dynamics_relu_free_pattern = relu_to_optimization.ReLUFreePattern(
-            dynamics_relu, dtype)
-        self.network_bound_propagate_method = \
-            mip_utils.PropagateBoundsMethod.IA
+            dynamics_relu, dtype
+        )
+        self.network_bound_propagate_method = mip_utils.PropagateBoundsMethod.IA
 
     @property
     def x_lo_all(self):
@@ -165,9 +184,8 @@ class PendulumReluContinuousTime:
         return self.x_up.detach().numpy()
 
     def mixed_integer_constraints(
-            self,
-            u_lo=None,
-            u_up=None) -> gurobi_torch_mip.MixedIntegerConstraintsReturn:
+        self, u_lo=None, u_up=None
+    ) -> gurobi_torch_mip.MixedIntegerConstraintsReturn:
         if u_lo is None:
             u_lo = self.u_lo
         if u_up is None:
@@ -175,51 +193,61 @@ class PendulumReluContinuousTime:
         network_input_lo = torch.cat((self.x_lo, u_lo))
         network_input_up = torch.cat((self.x_up, u_up))
         result = self.dynamics_relu_free_pattern.output_constraint(
-            network_input_lo, network_input_up,
-            self.network_bound_propagate_method)
+            network_input_lo, network_input_up, self.network_bound_propagate_method
+        )
         # Add the constraint xdot[0] = x[1]
         # xdot[1] = phi(x, u) - phi(x*, u*)
         result.Cout = torch.cat(
-            (torch.tensor([0], dtype=self.dtype),
-             result.Cout[0] - self.dynamics_relu(
-                 torch.cat((self.x_equilibrium, self.u_equilibrium)))))
-        assert (result.Aout_input is None)
-        result.Aout_input = torch.tensor([[0, 1, 0], [0, 0, 0]],
-                                         dtype=self.dtype)
-        result.Aout_slack = torch.cat((torch.zeros(
-            (1, result.num_slack()), dtype=self.dtype), result.Aout_slack),
-                                      dim=0)
-        if (result.Aout_binary is None):
-            result.Aout_binary = torch.zeros((2, result.num_binary()),
-                                             dtype=self.dtype)
+            (
+                torch.tensor([0], dtype=self.dtype),
+                result.Cout[0]
+                - self.dynamics_relu(
+                    torch.cat((self.x_equilibrium, self.u_equilibrium))
+                ),
+            )
+        )
+        assert result.Aout_input is None
+        result.Aout_input = torch.tensor([[0, 1, 0], [0, 0, 0]], dtype=self.dtype)
+        result.Aout_slack = torch.cat(
+            (torch.zeros((1, result.num_slack()), dtype=self.dtype), result.Aout_slack),
+            dim=0,
+        )
+        if result.Aout_binary is None:
+            result.Aout_binary = torch.zeros((2, result.num_binary()), dtype=self.dtype)
         else:
             result.Aout_binary = torch.cat(
-                (torch.zeros((1, result.num_binary()),
-                             dtype=self.dtype), result.Aout_binary),
-                dim=0)
+                (
+                    torch.zeros((1, result.num_binary()), dtype=self.dtype),
+                    result.Aout_binary,
+                ),
+                dim=0,
+            )
         relu_at_equilibrium = self.dynamics_relu(
-            torch.cat((self.x_equilibrium, self.u_equilibrium)))
+            torch.cat((self.x_equilibrium, self.u_equilibrium))
+        )
         result.x_next_lb = torch.stack(
-            (self.x_lo[1], result.nn_output_lo[0] - relu_at_equilibrium[0]))
+            (self.x_lo[1], result.nn_output_lo[0] - relu_at_equilibrium[0])
+        )
         result.x_next_ub = torch.stack(
-            (self.x_up[1], result.nn_output_up[0] - relu_at_equilibrium[0]))
+            (self.x_up[1], result.nn_output_up[0] - relu_at_equilibrium[0])
+        )
         return result
 
     def step_forward(self, x_start, u_start):
         if len(x_start.shape) == 1:
-            theta_ddot = self.dynamics_relu(torch.cat(
-                (x_start, u_start))) - self.dynamics_relu(
-                    torch.cat((self.x_equilibrium, self.u_equilibrium)))
+            theta_ddot = self.dynamics_relu(
+                torch.cat((x_start, u_start))
+            ) - self.dynamics_relu(torch.cat((self.x_equilibrium, self.u_equilibrium)))
             return torch.stack((x_start[1], theta_ddot[0]))
         else:
             theta_ddot = self.dynamics_relu(
-                torch.cat((x_start, u_start), dim=1)) - self.dynamics_relu(
-                    torch.cat((self.x_equilibrium, self.u_equilibrium)))
+                torch.cat((x_start, u_start), dim=1)
+            ) - self.dynamics_relu(torch.cat((self.x_equilibrium, self.u_equilibrium)))
             return torch.cat((x_start[:, 1:], theta_ddot), dim=1)
 
     def possible_dx(self, x, u):
-        assert (isinstance(x, torch.Tensor))
-        assert (isinstance(u, torch.Tensor))
+        assert isinstance(x, torch.Tensor)
+        assert isinstance(u, torch.Tensor)
         return [self.step_forward(x, u)]
 
     def add_dynamics_constraint(
@@ -233,9 +261,18 @@ class PendulumReluContinuousTime:
         additional_u_lo: torch.Tensor = None,
         additional_u_up: torch.Tensor = None,
         binary_var_type=gurobipy.GRB.BINARY,
-        u_input_prog: relu_system.ControlBoundProg = None
+        u_input_prog: relu_system.ControlBoundProg = None,
     ) -> relu_system.ReLUDynamicsConstraintReturn:
         return relu_system._add_forward_dynamics_mip_constraints(
-            self, mip, x_var, x_next_var, u_var, slack_var_name,
-            binary_var_name, additional_u_lo, additional_u_up, binary_var_type,
-            u_input_prog)
+            self,
+            mip,
+            x_var,
+            x_next_var,
+            u_var,
+            slack_var_name,
+            binary_var_name,
+            additional_u_lo,
+            additional_u_up,
+            binary_var_type,
+            u_input_prog,
+        )

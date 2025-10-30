@@ -230,7 +230,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=
                                      "quadrotor 2d forward model training and lqr controller/lyapunov approximation.")
     parser.add_argument("--generate_dynamics_data",
-                        default=dir_path+'/../data/preprocess/dataset.pt',#None,
+                        # default=dir_path+'/../data/preprocess/dataset.pt',#None,
+                        default=None,
                         help="path to save dynamics data.")
     parser.add_argument("--load_dynamics_data",
                         type=str,
@@ -248,7 +249,7 @@ if __name__ == "__main__":
     bound_level_x = bound_level
     bound_level_y = bound_level
     bound_level_theta = bound_level
-    args.train_forward_model = True
+    # args.train_forward_model = True
     # generate data and train for forward model
     if args.generate_dynamics_data:
         print("generate dynamics dataset")
@@ -266,7 +267,8 @@ if __name__ == "__main__":
                                          negative_slope=0.1,
                                          bias=True,
                                          dtype=torch.float64)
-        save_forward_dir = dir_path+'/../data/preprocess/cart_pole_forward_model_3d.pt'
+        # save_forward_dir = dir_path+'/../data/preprocess/cart_pole_forward_model_3d.pt'
+        save_forward_dir = "neural_network_lyapunov/examples/cart_pole/data/preprocess/cartpole_model_correct_gravity.pt"
         dynamics_relu = torch.load(save_forward_dir)
         train_forward_model(dynamics_relu,
                             dynamics_dataset,

@@ -1,0 +1,48 @@
+#!/bin/bash -l
+# Update conda path to yours
+source /home/abdelrahman/anaconda3/etc/profile.d/conda.sh
+
+# Create and activate environment if it doesn't exist
+conda create -n py3lyap python=3.8 -y
+conda activate py3lyap
+
+# Install requirements
+pip install -r requirements.txt
+pip install gurobipy  # Missing dependency
+
+python setup.py
+source ./config/setup_environments.sh
+
+# Stay in current directory instead of wrong path
+# cd /home/zw2445/Documents/neural-network-lyapunov  # Remove this line
+
+# Start timer
+SECONDS=0
+
+# for i in {1..10}; do
+    python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
+        --use_fpl \
+        --bound_level=10 \
+        --search_R \
+        --pretrain_num_epochs=200 \
+        --batch_size=128 \
+        --learning_rate=1e-2 \
+        # --max_iterations=1 \
+
+
+        # --load_lyapunov_relu="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_lyapunov.pt" \
+        # --load_controller_relu="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_controller.pt" \
+        # --load_lyapunov_R="neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_R.pt" \
+
+
+        # --bound_level_last=$(($i-1)) \
+        # --bound_level=10 \
+        
+# done
+
+# Stop timer and report
+duration=$SECONDS
+echo "Total execution time: $((duration / 3600))h $(((duration / 60) % 60))m $((duration % 60))s"
+
+
+conda deactivate
