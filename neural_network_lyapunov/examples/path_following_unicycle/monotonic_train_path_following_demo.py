@@ -412,7 +412,7 @@ if __name__ == "__main__":
         # dynamics_relu = convert_to_standard_relu_network(
         #     dt=dt, v=plant.v, nb_points=17, hidden_sizes=(32, 32), dtype=torch.float64
         # )
-        dynamics_relu = convert_to_standard_relu_network(
+        dynamics_relu = load_relu_unicycle_dynamics(
             dt=dt, v=plant.v, nb_points=17, use_standard_relu=False, dtype=torch.float64
         )
 
