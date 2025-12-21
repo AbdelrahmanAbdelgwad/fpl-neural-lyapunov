@@ -404,16 +404,13 @@ if __name__ == "__main__":
         # #     dtype=torch.float64)
         # # dynamics_relu.load_state_dict(dynamics_model_data["state_dict"])
         # dynamics_relu = torch.load(dynamics_model_path, map_location=device)
-        from relu_unicycle_dynamics import (
-            convert_to_standard_relu_network,
-            load_relu_unicycle_dynamics,
-        )
+        from path_following_relu_dynamics import build_path_following_dynamics_relu
 
-        # dynamics_relu = convert_to_standard_relu_network(
-        #     dt=dt, v=plant.v, nb_points=17, hidden_sizes=(32, 32), dtype=torch.float64
-        # )
-        dynamics_relu = load_relu_unicycle_dynamics(
-            dt=dt, v=plant.v, nb_points=17, use_standard_relu=False, dtype=torch.float64
+        # Build fixed dynamics network φ_dyn
+        dynamics_relu = build_path_following_dynamics_relu(
+            nb_points=17,
+            v=plant.v,
+            dtype=torch.float64,
         )
 
     if args.generate_controller_cost_data:

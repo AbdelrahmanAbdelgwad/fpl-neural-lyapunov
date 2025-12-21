@@ -1039,6 +1039,17 @@ def setup_relu(
     return relu
 
 
+import torch
+import neural_network_lyapunov.utils as utils
+
+
+import torch
+import neural_network_lyapunov.utils as utils
+
+
+import numpy as np
+
+
 def update_relu_params(relu, params: torch.Tensor):
     """
     Sets the weights and bias of the ReLU network to @p params.
