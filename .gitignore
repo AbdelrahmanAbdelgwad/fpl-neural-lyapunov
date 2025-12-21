@@ -155,3 +155,12 @@ notebooks/*.p
 *wandb
 
 lyapunov_venv/
+visualization_results/
+viz_compare
+
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+*.svg

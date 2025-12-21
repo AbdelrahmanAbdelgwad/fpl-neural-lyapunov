@@ -1,7 +1,8 @@
 #%%
 import sys  
-import sys  
-sys.path.insert(0, '/home/zw2445/Documents/neural-network-lyapunov/')
+import os
+project_dir ="/Users/heyday1006/Documents/GitHub/neural-network-lyap-control-roa/"
+sys.path.insert(0, project_dir)
 
 
 from neural_network_lyapunov.examples.cart_pole.visualizations.unicycle_visualization_utils import *
@@ -29,8 +30,7 @@ x_up = torch.tensor([1*bound_level_tmp,np.pi/6*bound_level_tmp,
 # load_prefix = "/modified/data/modified_fixController_bound" +str(bound_level)
 load_lossSeq_prefix = "data/monotonic/monotonic_bound"
 load_prefix = load_lossSeq_prefix +str(bound_level)
-dir_path = '/home/zw2445/Documents/neural-network-lyapunov/neural_network_lyapunov/examples/cart_pole/'#os.path.dirname(os.path.realpath(__file__))#+"/.."
-
+dir_path = project_dir + "/neural_network_lyapunov/examples/cart_pole/"
 load_dynamics_relu = dir_path + "data/preprocess/cart_pole_forward_model_3d.pt"
 load_lyapunov_relu = dir_path+ load_prefix+"_lyapunov.pt"
 load_controller_relu = dir_path+load_prefix+"_controller.pt"
