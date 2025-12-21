@@ -3,6 +3,43 @@ import numpy as np
 import neural_network_lyapunov.utils as utils
 
 
+def build_inv_relu_network(d_min, d_max, nb_points, dtype=torch.float64):
+    """
+    Builds a ReLU network approximating g(d) = 1 / (1 - d)
+    over d ∈ [d_min, d_max].
+    """
+    d = np.linspace(d_min, d_max, nb_points)
+    v = 1.0 / (1.0 - d)
+
+    delta = (d_max - d_min) / (nb_points - 1)
+
+    A1 = np.tile([1.0], (nb_points - 1, 1))
+    b1 = d[:-1]
+
+    slopes = np.diff(v) / delta
+    A2 = slopes.reshape(1, -1)
+    v_offset = v[0]
+
+    A1 = torch.tensor(A1, dtype=dtype)
+    b1 = torch.tensor(-b1, dtype=dtype)
+    A2 = torch.tensor(A2, dtype=dtype)
+
+    net = utils.setup_relu(
+        (1, nb_points - 1, 1),
+        negative_slope=0.0,
+        bias=True,
+        dtype=dtype,
+    )
+
+    net[0].weight.data[:] = A1
+    net[0].bias.data[:] = b1
+
+    net[2].weight.data[:] = A2
+    net[2].bias.data[:] = v_offset
+
+    return net
+
+
 def build_trig_relu_matrices(nb_points: int, func: str):
     assert func in ("sin", "cos")
 
@@ -102,7 +139,15 @@ def build_path_following_dynamics_relu(nb_points, v, dtype=torch.float64):
     net[4].weight.data[0, :] = v * sin_net[4].weight.data
 
     # θ̇_e = u − v cos(theta_e)
-    net[4].weight.data[1, :] = -v * cos_net[4].weight.data
-    net[4].weight.data[1, 2] = 1.0  # control input
+    inv_net = build_inv_relu_network(
+        d_min=-0.8,
+        d_max=0.8,
+        nb_points=17,
+        dtype=dtype,
+    )
+
+    # θ̇_e = u − v * cos(theta_e) * inv(1-d_e)
+    net[4].weight.data[1, :] = -v * (cos_net[4].weight.data * inv_net[2].weight.data)
+    net[4].weight.data[1, 2] = 1.0
 
     return net
