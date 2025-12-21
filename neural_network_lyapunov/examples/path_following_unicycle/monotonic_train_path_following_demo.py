@@ -370,6 +370,9 @@ if __name__ == "__main__":
     print("input bound: ", x_lo, x_up)
 
     dt = 0.01
+
+    plant = path_following.Path_Following(torch.float64)
+
     if args.generate_dynamics_data:
         model_dataset = generate_pendulum_dynamics_data(dt)
     if args.load_dynamics_data is not None:
@@ -390,17 +393,22 @@ if __name__ == "__main__":
         )
         train_forward_model(dynamics_relu, dynamics_dataset, num_epochs=100)
     else:  # if args.load_forward_model:
-        dynamics_model_path = (
-            dir_path + "/data/preprocess/path_following_unicycle_forward_model.pt"
+        # dynamics_model_path = (
+        #     dir_path + "/data/preprocess/path_following_unicycle_forward_model.pt"
+        # )
+        # # dynamics_relu = utils.setup_relu(
+        # #     dynamics_model_data["linear_layer_width"],
+        # #     params=None,
+        # #     negative_slope=dynamics_model_data["negative_slope"],
+        # #     bias=dynamics_model_data["bias"],
+        # #     dtype=torch.float64)
+        # # dynamics_relu.load_state_dict(dynamics_model_data["state_dict"])
+        # dynamics_relu = torch.load(dynamics_model_path, map_location=device)
+        from relu_unicycle_dynamics import convert_to_standard_relu_network
+
+        dynamics_relu = convert_to_standard_relu_network(
+            dt=dt, v=plant.v, nb_points=17, hidden_sizes=(32, 32), dtype=torch.float64
         )
-        # dynamics_relu = utils.setup_relu(
-        #     dynamics_model_data["linear_layer_width"],
-        #     params=None,
-        #     negative_slope=dynamics_model_data["negative_slope"],
-        #     bias=dynamics_model_data["bias"],
-        #     dtype=torch.float64)
-        # dynamics_relu.load_state_dict(dynamics_model_data["state_dict"])
-        dynamics_relu = torch.load(dynamics_model_path, map_location=device)
 
     if args.generate_controller_cost_data:
         state_samples, control_samples, cost_samples = generate_controller_dataset()
@@ -431,7 +439,6 @@ if __name__ == "__main__":
         # controller_relu.load_state_dict(controller_data["state_dict"])
         controller_relu = torch.load(args.load_controller_relu)
 
-    plant = path_following.Path_Following(torch.float64)
     # lqr_gain = plant.lqr_control(np.diag([1., 10.]), np.array([[1.]]))
 
     dtype = torch.float64
@@ -609,6 +616,6 @@ if __name__ == "__main__":
         # dut.lyapunov_upper = 1.#1.#None
         dut.patience = 1e6
         dut.no_improve_count = 0
-        dut.best_violation = float('inf')
+        dut.best_violation = float("inf")
         dut.train(torch.empty((0, 2), dtype=torch.float64))
     pass
