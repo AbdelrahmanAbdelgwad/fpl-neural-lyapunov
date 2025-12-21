@@ -1,6 +1,8 @@
 # Ignore all folders named 'data'
 **/data_report
 
+**/data/
+
 # Ignore all folders named 'data'
 **/visualizations/plot*/
 
