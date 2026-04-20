@@ -1,65 +1,213 @@
-# Introduction
-This repo contains the code for the project as introduced in
-   - [Lyapunov Neural Network with Region of Attraction Search](https://arxiv.org/pdf/2403.10621) <br>
-       Zili Wang, Sean B. Andersson, and Roberto Tron <br>
-       IEEE American Control Conference 2024 
+# Accelerating Lyapunov-Stable Neural Control using Fulfillment Priority Logic
 
-# Setup
+This repository contains the code accompanying the ACC 2026 paper:
 
-Please follow `REF_README.md` to set up the environment.
+> **Accelerating Lyapunov-Stable Neural Control using Fulfillment Priority Logic**
+> Abdelrahman Abdelgawad, Bassel El Mabsout, Zili Wang, Renato Mancuso, Sean B. Andersson, Roberto Tron
+> *American Control Conference (ACC), 2026*
 
-## Run experiments
-TODO: add instructions to run (1) system model training (`preprocess` folder). (2) controller initialization (`preprocess` folder) (3) multi-polygon training (4) result visualization (`visualization` folder) 
-You could run
+The method combines monotonic neural Lyapunov functions
+([Wang, Andersson, Tron, ACC 2024](https://doi.org/10.23919/ACC60939.2024.10644877))
+with Fulfillment Priority Logic
+([Mabsout, Abdelgawad, Mancuso, IROS 2025](https://doi.org/10.1109/IROS60139.2025.11247623))
+to dramatically reduce training time while preserving formal Lyapunov stability
+guarantees obtained via MILP verification.
+
+The pipeline has two stages:
+
+1. **Stage I — FPL pre-training.** A sampling-based FPL objective jointly
+   initializes the controller and Lyapunov networks using gradient descent on
+   short rollouts. No MILP calls in this stage.
+2. **Stage II — MILP certify-repair.** Exactly the procedure of the monotonic
+   Lyapunov baseline: iteratively solve a MILP for the worst-case
+   Lyapunov-decrease violation and take a gradient step on the active-set
+   surrogate until the system is certified.
+
+Prepending Stage I reduces wall-clock training time by ~95% on the pendulum
+and ~94% on the path-following unicycle benchmarks (see paper, Table I).
+
+> **Note.** This repository was forked from an earlier codebase. Irrelevant
+> examples have been removed; what remains is what's needed to reproduce the
+> ACC 2026 paper.
+
+## Repository layout
+
 ```
-$ bash train_path_following_unicycle_monotonic.sh
+.
+├── bash_files/                          # Paper reproduction wrappers
+│   ├── pendulum/
+│   │   ├── train_pendulum_monotonic.sh         # Baseline (no FPL)
+│   │   └── train_pendulum_monotonic_fpl.sh     # FPL-accelerated
+│   └── path_following/
+│       ├── train_path_following_unicycle_monotonic_40.sh   # Baseline
+│       └── train_path_following_unicycle_monotonic_fpl.sh  # FPL-accelerated
+├── neural_network_lyapunov/             # Library + example systems
+│   ├── monotonic_lyapunov/              # Monotonic NN Lyapunov core
+│   ├── monotonic_lyapunov_init/         # Pre-training/init utilities
+│   └── examples/
+│       ├── pendulum/
+│       ├── path_following_unicycle/
+│       └── cart_pole/                   # Used for teleop demos only
+├── paper_viz.py                         # Generates Figs. 1–3 of the paper
+├── acc_viz.py                           # Support module for paper_viz.py
+├── requirements.txt
+└── setup.py                             # Writes config/setup_environments.sh
 ```
-This will synthesize a stabilizing controller together with a Lyapunov certificate for the unit-circle path-following unicycle model.
 
-You could also run
+## Setup
+
+### 1. Python environment
+
+Python 3.8 is recommended (the original monotonic baseline was developed on
+3.8). Create and activate an environment with your preferred tool, e.g.:
+
+```bash
+conda create -n fpl-lyap python=3.8 -y
+conda activate fpl-lyap
 ```
-$ bash train_path_following_unicycle.sh
+
+Install requirements:
+
+```bash
+pip install -r requirements.txt
 ```
-to generate the baseline results.
 
+### 2. Gurobi
 
-# Setup
+Stage II verification uses Gurobi (≥ 9.5). Obtain a license from
+https://www.gurobi.com/ and install the Python API:
 
-## Python requirements
-We use python 3 in this project. You could first install the packages in requirements.txt.
-
-## Install gurobi
-Please download gurobi from https://www.gurobi.com/products/gurobi-optimizer/. We require at least gurobi 9.5. After downloading the software, please install its Python API by following https://www.gurobi.com/documentation/9.0/quickstart_mac/the_grb_python_interface_f.html
-
-To check your gurobi installation, type the following command in your terminal:
+```bash
+pip install gurobipy
+python -c "import gurobipy"   # should succeed silently
 ```
-$ python3 -c "import gurobipy"
-```
-There should be no error thrown when executing the command.
 
-## Setup environment variable
-In the terminal, please run
-```
-$ python3 setup.py
-```
-It will print out the command to setup the environment variables. Execute that command in your terminal.
+### 3. PYTHONPATH
 
-## Run a toy example
-You could run
-```
-$ python3 neural_network_lyapunov/test/train_toy_system_controller_demo.py --dimension=1
-```
-This will synthesize a stabilizing controller with a Lyapunov function for a toy 1D system (TODO: add some visualization at the end of the demo). You should see that the error printed on the screen decreases to almost 0. (The code is non-deterministic, so if it doesn't converge to 0 in the first trial, you can re-run the demo and hopefully it converges in the second trial).
+The training `bash_files/*` scripts add the repo root to `PYTHONPATH`
+automatically. If you run Python files directly, either:
 
-# Contributing to repo
-## Linting
-We use `flake8` to check if the python code follows PEP standard. Before submitting the PR, you could run
-```
-$ cd neural_network_lyapunov
-$ flake8 ./
-```
-to check if there are any violations.
+- Run `python setup.py` once (writes `config/setup_environments.sh`),
+  then `source ./config/setup_environments.sh`; or
+- Set it manually: `export PYTHONPATH="$(pwd):${PYTHONPATH}"`.
 
-## Unit test
-I am a strong believer of unit test. We strongly encourage to add tests to the functions in the PR.
+## Reproducing paper results
 
+All commands below assume you have activated your Python environment and are
+at the repository root.
+
+### Training (Table I)
+
+Pendulum:
+
+```bash
+# Baseline (no FPL) — Stage II only
+bash bash_files/pendulum/train_pendulum_monotonic.sh
+
+# With FPL — Stage I + Stage II
+bash bash_files/pendulum/train_pendulum_monotonic_fpl.sh
+```
+
+Path-following unicycle:
+
+```bash
+# Baseline (no FPL)
+bash bash_files/path_following/train_path_following_unicycle_monotonic_40.sh
+
+# With FPL
+bash bash_files/path_following/train_path_following_unicycle_monotonic_fpl.sh
+```
+
+Trained weights are written under
+`neural_network_lyapunov/examples/<system>/data/`. Wall-clock time is printed
+at the end of each run (measured via the `SECONDS` builtin).
+
+### Paper figures (Figs. 1–3)
+
+`paper_viz.py` evaluates learned controllers in closed loop and generates the
+settling-time, control-effort, and phase-diagram plots used in the paper.
+
+```bash
+# Pendulum (Fig. 1a, 2a, 3a)
+python paper_viz.py --env pendulum --bound_level 10 --precision float64 \
+    --T 100 --dt 0.01 --eps 1e-3 --stride 1 \
+    --ic_phase 10 --sample_mode_phase random --ic_seed 12345 \
+    --roa_samples 5000 --ic_effort 5000 --sample_mode_effort random \
+    --save_dir paper_figs/pendulum/ --gif
+
+# Unicycle (Fig. 1b, 2b, 3b)
+python paper_viz.py --env unicycle --bound_level 40 --gpu --precision float64 \
+    --T 50 --dt 0.01 --eps 1e-3 --stride 1 \
+    --ic_phase 10 --sample_mode_phase random --ic_seed 12345 \
+    --roa_samples 5000 --ic_effort 5000 --sample_mode_effort random \
+    --save_dir paper_figs/unicycle/ --gif
+```
+
+### Per-system comparison plots
+
+Side-by-side comparisons between a controller trained without FPL and one
+trained with FPL (expects both checkpoints to exist under `data/`):
+
+```bash
+python neural_network_lyapunov/examples/pendulum/pendulum_viz_compare.py \
+    --bound_level 10 --save_figs
+
+python neural_network_lyapunov/examples/path_following_unicycle/path_following_viz_compare.py \
+    --bound_level 40 --save_figs
+
+python neural_network_lyapunov/examples/cart_pole/cart_pole_viz_compare.py \
+    --bound_level 100 --save_figs
+```
+
+### Interactive teleop / closed-loop rollout
+
+Roll out a learned controller from a user-specified initial condition:
+
+```bash
+# Pendulum (FPL controller, bound 10)
+python neural_network_lyapunov/examples/pendulum/teleop_pendulum.py \
+    --model neural_network_lyapunov/examples/pendulum/data/pendulum_second_order_forward_relu2.pt \
+    --controller NN \
+    --controller-model neural_network_lyapunov/examples/pendulum/data/monotonic_bound10_fpl/monotonic_bound10_fpl_controller.pt \
+    --init 3 3 --clamp-bounds --compare --umax 20 --dt 0.01
+
+# Unicycle (FPL controller, bound 40)
+python neural_network_lyapunov/examples/path_following_unicycle/teleop_path_following.py \
+    --model neural_network_lyapunov/examples/path_following_unicycle/data/preprocess/path_following_unicycle_forward_model.pt \
+    --clamp-bounds --controller NN \
+    --controller-path neural_network_lyapunov/examples/path_following_unicycle/data/monotonic/monotonic_bound40_fpl/monotonic_bound40_fpl_controller.pt \
+    --init 0.8 -0.8
+
+# Cart-pole (demo only — uses pre-trained model, not a paper experiment)
+python neural_network_lyapunov/examples/cart_pole/teleop_cartpole.py \
+    --controller zero \
+    --model neural_network_lyapunov/examples/cart_pole/data/preprocess/cart_pole_forward_model_3d.pt \
+    --clamp-bounds --model-output accel --model-input theta \
+    --x-init 0.0 3.0 0.0 0.0 --dt 0.01 --umax 30 --compare
+```
+
+## Hardware used in the paper
+
+All paper experiments ran on CPU only: AMD Ryzen Threadripper 3960x (24C/48T),
+62.7 GiB RAM, Ubuntu 20.04.6 LTS. No GPU was required.
+
+## Citation
+
+```bibtex
+@inproceedings{abdelgawad2026fpl,
+  author    = {Abdelgawad, Abdelrahman and El Mabsout, Bassel and Wang, Zili
+               and Mancuso, Renato and Andersson, Sean B. and Tron, Roberto},
+  title     = {Accelerating {Lyapunov}-Stable Neural Control using
+               {Fulfillment Priority Logic}},
+  booktitle = {American Control Conference (ACC)},
+  year      = {2026}
+}
+```
+
+## Acknowledgments
+
+This work was supported in part by NSF FRR-2212051. The authors thank the BU
+Robotics Lab for providing computational resources and support.
+
+This codebase is built on top of the monotonic neural Lyapunov baseline of
+[Wang et al., ACC 2024](https://doi.org/10.23919/ACC60939.2024.10644877).

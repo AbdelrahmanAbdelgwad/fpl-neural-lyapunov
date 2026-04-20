@@ -1,46 +1,24 @@
-#!/bin/bash -l
-source /home/abdelrahman/anaconda3/etc/profile.d/conda.sh
+#!/usr/bin/env bash
+# Baseline (no FPL) pendulum training: Stage II only (MILP certify-repair).
+# Reproduces the "Without FPL" pendulum row of Table I in the paper.
+#
+# Prerequisites (see README.md):
+#   - Python env with requirements.txt installed and gurobipy available
+#   - Activate the env yourself before running this script.
 
+set -euo pipefail
 
-# Navigate to project root
-cd /home/abdelrahman/projects/Neural_Lyapunov_Control/neural-network-lyap-control-roa
-source config/setup_environments.sh
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
+cd "${REPO_ROOT}"
 
-# Activate conda environment (create if needed)
-conda activate py3lyap 2>/dev/null || {
-    conda create -n py3lyap python=3.8 -y
-    conda activate py3lyap
-}
-
-# Install requirements
-pip install -r requirements.txt
-pip install gurobipy
-
-# Add project to PYTHONPATH instead of installing
-export PYTHONPATH="${PWD}:${PYTHONPATH}"
-
-# Run training
 SECONDS=0
 
 for i in {1..10}; do
-    if [ "$i" -eq 1 ]; then
-        python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
-            --bound_level=$i \
-            --bound_level_last=$(($i-1)) \
-            # --search_R \
-
-            # --max_iterations=1000
-    else
-        python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
-            --bound_level=$i \
-            --bound_level_last=$(($i-1)) \
-            # --search_R \
-
-            # --max_iterations=1000
-    fi
+    python neural_network_lyapunov/examples/pendulum/monotonic_train_pendulum_demo.py \
+        --bound_level=${i} \
+        --bound_level_last=$((i-1))
 done
 
-duration=$SECONDS
+duration=${SECONDS}
 echo "Total execution time: $((duration / 3600))h $(((duration / 60) % 60))m $((duration % 60))s"
-
-conda deactivate
